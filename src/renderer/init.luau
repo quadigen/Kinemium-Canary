@@ -1,0 +1,1089 @@
+local task = zune.task
+local KiRend = {}
+
+local signal = require("@Kinemium.signal")
+local argon = require("@Argon")
+local immco = require("@Immco")
+local Instance = require("@Instance")
+
+local mockMeshlib = {
+	LoadMesh = function()
+		return {}
+	end,
+	UnloadMesh = function() end,
+	GetMesh = function()
+		return nil
+	end,
+	GenerateMesh = function()
+		return {}, {}
+	end,
+	PreloadStandardMeshes = function()
+		return {}
+	end,
+	GetModelRegistry = function()
+		return {}
+	end,
+	drawModel = function() end,
+	loadMaterialOnModel = function() end,
+}
+
+local mockSkybox = {
+	Load = function() end,
+	Unload = function() end,
+	Draw = function() end,
+	FromCubemap = function()
+		return {}
+	end,
+}
+
+local mockShader = {
+	LoadShader = function()
+		return {}
+	end,
+	LoadShaderCode = function()
+		return {}
+	end,
+	GetShaderUniformLocation = function()
+		return 0
+	end,
+	SetShaderUniform = function() end,
+	SetShaderValueRaw = function() end,
+	SetShaderTextureRaw = function() end,
+	SetShaderTexture = function() end,
+	UnloadShader = function() end,
+}
+
+local mockFreecam = {
+	Update = function() end,
+	SetSpeed = function() end,
+	SetSensitivity = function() end,
+	GetPos = function()
+		return { X = 0, Y = 0, Z = 0 }
+	end,
+	SetCFrame = function() end,
+	GetCFrame = function()
+		return { Position = { X = 0, Y = 0, Z = 0 } }
+	end,
+}
+
+local mockTexture = function()
+	return {
+		LoadTextureFromFile = function()
+			return nil
+		end,
+		LoadTextureFromFileAsync = function()
+			return nil
+		end,
+		GetMaterials = function()
+			return {}
+		end,
+	}
+end
+
+local mockBlur = {
+	Init = function(width, height)
+		return {
+			enabled = true,
+			SetBlurRadius = function() end,
+			BeginCapture = function() end,
+			EndCapture = function() end,
+			ApplyBlur = function() end,
+			DrawFullBlur = function() end,
+			DrawMixed = function() end,
+			DrawBlurredRegion = function() end,
+			DrawUnblurred = function() end,
+			Enable = function() end,
+			Disable = function() end,
+			Cleanup = function() end,
+		}
+	end,
+}
+
+local mockRaylib = {
+	lib = setmetatable({}, {
+		__index = function(_, key)
+			return function()
+				return 0
+			end
+		end,
+	}),
+	const = setmetatable({}, {
+		__index = function(_, key)
+			return {}
+		end,
+	}),
+	structs = setmetatable({}, {
+		__index = function(_, key)
+			return {
+				new = function()
+					return {}
+				end,
+				offset = function()
+					return 0
+				end,
+				size = function()
+					return 0
+				end,
+			}
+		end,
+	}),
+}
+
+-- TYPES
+export type KiRendConf = {
+	width: number,
+	height: number,
+	title: string,
+	vsync: boolean?,
+}
+
+function KiRend.new(config: KiRendConf)
+	local time = 0.0
+	local frameCount = 0
+	local frameTime = 0
+	local lastFrameTime = os.clock()
+	local isRunning = false
+	local pending_clicks = {}
+
+	argon:Init()
+
+	local function isMouseInRect(mousePos, drawPos, size)
+		return mousePos.X >= drawPos.X
+			and mousePos.X <= drawPos.X + size.X
+			and mousePos.Y >= drawPos.Y
+			and mousePos.Y <= drawPos.Y + size.Y
+	end
+
+	local window = argon:InitWindow({
+		Width = config.width,
+		Height = config.height,
+		Title = config.title,
+		WGI = "opengl",
+	})
+
+	local context = argon:CreateRenderingContext(window)
+	local window_renderer = argon:CreateRenderer(window)
+
+	local skia_tex = argon:CreateTexture({
+		width = config.width,
+		height = config.height,
+		renderer = window_renderer,
+		pixelFormat = "ABGR8888",
+		access = "STREAMING",
+	})
+
+	local skia_tools = argon:CreateTexture({
+		width = config.width,
+		height = config.height,
+		renderer = window_renderer,
+		pixelFormat = "ABGR8888",
+		access = "STREAMING",
+	})
+
+	local skia_tools_ctx = argon:CreateSkiaSurface(config.width, config.height)
+	local freecam = require("./renderer/freecam")
+	local activeCamera = nil
+
+	local filament_tex = argon:CreateTexture({
+		width = config.width,
+		height = config.height,
+		renderer = window_renderer,
+		pixelFormat = "ABGR8888",
+		access = "STREAMING",
+	})
+
+	argon:ShowWindow(window)
+	argon:BeginFrame(context)
+	argon:Init3D(window)
+
+	local renderer_eventbus = signal.new()
+	local renderer_hooks = {
+		Before3D = {},
+		After3D = {},
+		After2D = {},
+		Before2D = {},
+		Renderstep = {},
+		Afterstep = {},
+		Shutdown = {},
+	}
+	local renderer_pool = {
+		gui = {},
+		object = {},
+		gizmos = {},
+		gui_above = {},
+	}
+	local renderer_pool_order = 0
+	local renderer_storage = {
+		fonts = {},
+		sounds = {},
+	}
+	local renderer_font_resolver
+	local renderer_watching_keys = {}
+	local renderer_draw_calls = {}
+	local renderer_instanced_draw_calls = {}
+	local renderer_meshes = {}
+	local ENGINE_PROFILER = nil
+
+	local Dimension = "3D"
+
+	local draw_calls_count = 0
+	local instanced_draw_calls_count = 0
+	local decal_draw_calls_count = 0
+
+	local renderer_decal_draw_calls = {}
+	local renderer_instance_buffers_to_unload = {}
+
+	local perf_stats = {
+		frame_ms = 0,
+		fps = 0,
+		update_ms = 0,
+		render3d_ms = 0,
+		ui_ms = 0,
+		gui_roots = 0,
+		scene_roots_3d = 0,
+		mesh_calls = 0,
+		instanced_batches = 0,
+		instanced_instances = 0,
+		batches_3d = 0,
+		input_ms = 0,
+		input_key_ms = 0,
+		rendereventbus_conns = 0,
+		call3d_ms = 0,
+		dispatch_ms = 0,
+		render3d_update_ms = 0,
+		gc_ms = 0,
+		gc_last = os.clock(),
+	}
+
+	local function getSortedPool(pool)
+		local sorted = {}
+		for id, entry in pairs(pool) do
+			table.insert(sorted, { id = id, entry = entry })
+		end
+		table.sort(sorted, function(a, b)
+			if a.entry.priority == b.entry.priority then
+				return (a.entry.order or 0) < (b.entry.order or 0)
+			end
+			return a.entry.priority < b.entry.priority
+		end)
+		return sorted
+	end
+
+	local rendererObject
+
+	rendererObject = {
+		Mesh = mockMeshlib,
+		Skybox = mockSkybox,
+		Freecam = mockFreecam,
+		Shader = mockShader,
+		Raylib = mockRaylib,
+		Texture = mockTexture(),
+		Enable3D = true,
+		Blur = mockBlur.Init(config.width, config.height),
+		AboveCanvas = skia_tools_ctx,
+
+		Width = config.width,
+		Height = config.height,
+		Window = window,
+		Frametime = frameTime,
+
+		DrawFps = true,
+		ShowPerfOverlay = false,
+		PerfStats = perf_stats,
+
+		SetDimension = function(self, dimension: "2D" | "3D")
+			Dimension = dimension
+		end,
+
+		RuntimeLibrary = {
+			lib = mockRaylib.lib,
+			drawModel = mockMeshlib.drawModel,
+			loadMaterialOnModel = mockMeshlib.loadMaterialOnModel,
+			LoadShader = mockShader.LoadShader,
+			structs = mockRaylib.structs,
+			const = mockRaylib.const,
+			dt = frameTime,
+			time = 0,
+			perf = perf_stats,
+		},
+
+		EventBus = renderer_eventbus,
+
+		Draw = mockRaylib.lib,
+
+		Hook = {
+			new = function(
+				hookListName: "Before3D" | "After3D" | "Before2D" | "After2D" | "Renderstep" | "Afterstep" | "Shutdown",
+				cb
+			)
+				if not renderer_hooks[hookListName] then
+					return
+				end
+				table.insert(renderer_hooks[hookListName], cb)
+			end,
+		},
+
+		Font = {
+			SetResolver = function(resolver)
+				renderer_font_resolver = resolver
+			end,
+
+			new = function(name, fontPath, size)
+				if renderer_storage.fonts[name] then
+					return renderer_storage.fonts[name]
+				end
+				renderer_storage.fonts[name] = {
+					name = name,
+					path = fontPath,
+					size = size or 24,
+				}
+				return renderer_storage.fonts[name]
+			end,
+
+			Get = function(name)
+				local font = renderer_storage.fonts[name]
+				if font or not renderer_font_resolver then
+					return font
+				end
+
+				local success, result = pcall(renderer_font_resolver, name)
+				if not success then
+					warn(result)
+					return nil
+				end
+
+				return renderer_storage.fonts[name] or result
+			end,
+
+			getFontTexture = function(name)
+				return renderer_storage.fonts[name]
+			end,
+
+			Remove = function(name)
+				renderer_storage.fonts[name] = nil
+			end,
+		},
+
+		MeshPool = {
+			DrawMesh = function(mesh, material, matrix, begin, End)
+				table.insert(renderer_draw_calls, {
+					mesh = mesh,
+					material = material,
+					matrix = matrix,
+					Begin = begin,
+					End = End,
+				})
+				draw_calls_count += 1
+			end,
+
+			DrawMeshInstanced = function(mesh, material, instances, count, begin, End, unloadAfterFrame)
+				table.insert(renderer_instanced_draw_calls, {
+					mesh = mesh,
+					material = material,
+					instances = instances,
+					count = count or 0,
+					Begin = begin,
+					End = End,
+					unloadAfterFrame = unloadAfterFrame == true,
+				})
+				instanced_draw_calls_count += 1
+			end,
+
+			CreateMaterial = function(texture, shader)
+				return buffer.create(64) -- mock material struct
+			end,
+
+			AddMesh = function(mesh, mat_texture, mat_shader)
+				local data = {
+					id = math.random(0, 1000),
+					mat = {},
+				}
+				table.insert(renderer_meshes, data)
+				return data
+			end,
+
+			GetMesh = function(MeshId)
+				for _, v in pairs(renderer_meshes) do
+					if v.id == MeshId then
+						return v
+					end
+				end
+				return nil
+			end,
+
+			SetConfigMesh = function(meshId, prop, Value)
+				for i, v in pairs(renderer_meshes) do
+					if v.id == meshId then
+						renderer_meshes[i][prop] = Value
+						break
+					end
+				end
+			end,
+
+			RemoveMesh = function(id)
+				for i, v in pairs(renderer_meshes) do
+					if v.id == id then
+						table.remove(renderer_meshes, i)
+						break
+					end
+				end
+			end,
+		},
+
+		DecalPool = {
+			DrawDecal = function() end,
+		},
+
+		Pool = {
+			new = function(type: "2d" | "3d" | "2da" | "gizmo", renderFn: () -> (), priority: number?)
+				local pool
+				if type == "2d" then
+					pool = renderer_pool.gui
+				elseif type == "3d" then
+					pool = renderer_pool.object
+				elseif type == "gizmo" then
+					pool = renderer_pool.gizmos
+				elseif type == "2da" then
+					pool = renderer_pool.gui_above
+				end
+
+				local id
+				repeat
+					id = math.random(1, 99999)
+				until pool[id] == nil
+
+				renderer_pool_order += 1
+				pool[id] = {
+					render = renderFn,
+					object = nil,
+					priority = priority or 0,
+					order = renderer_pool_order,
+				}
+
+				return id
+			end,
+
+			SetPriority = function(id, newPriority: number)
+				if renderer_pool.gui[id] then
+					renderer_pool.gui[id].priority = newPriority
+				elseif renderer_pool.object[id] then
+					renderer_pool.object[id].priority = newPriority
+				elseif renderer_pool.gizmos[id] then
+					renderer_pool.gizmos[id].priority = newPriority
+				end
+			end,
+
+			Destroy = function(id)
+				renderer_pool.gui[id] = nil
+				renderer_pool.object[id] = nil
+				renderer_pool.gizmos[id] = nil
+			end,
+		},
+
+		Audio = {
+			new = function(audioPath, volume, pitch)
+				local soundId = math.random(1, 99999)
+				renderer_storage.sounds[soundId] = {
+					path = audioPath,
+					volume = volume or 1.0,
+					pitch = pitch or 1.0,
+					playing = false,
+				}
+
+				return {
+					IsPlaying = function()
+						return renderer_storage.sounds[soundId] and renderer_storage.sounds[soundId].playing or false
+					end,
+
+					Pause = function()
+						if renderer_storage.sounds[soundId] then
+							renderer_storage.sounds[soundId].playing = false
+						end
+					end,
+
+					Play = function()
+						if renderer_storage.sounds[soundId] then
+							renderer_storage.sounds[soundId].playing = true
+						end
+					end,
+
+					Destroy = function()
+						renderer_storage.sounds[soundId] = nil
+					end,
+				}
+			end,
+		},
+	}
+
+	rendererObject.tex3d_rect = nil
+
+	function rendererObject:Set3DTexProps(x, y, w, h)
+		if x == nil then
+			self.tex3d_rect = nil
+		else
+			self.tex3d_rect = { X = x, Y = y, Width = w, Height = h }
+		end
+	end
+
+	function rendererObject.GetViewMatrix()
+		-- no real camera matrix in headless, return nil
+		return nil
+	end
+
+	function rendererObject:GetProjectionMatrix()
+		return nil
+	end
+
+	function rendererObject:GetInverseProjectionMatrix()
+		return nil
+	end
+
+	function rendererObject:WatchKey(RaylibKeyObject)
+		renderer_watching_keys[RaylibKeyObject] = true
+	end
+
+	function rendererObject:HasClicked(rect: { x: number, y: number, width: number, height: number })
+		local clicks = pending_clicks
+		if not clicks or #clicks == 0 then
+			return false
+		end
+
+		for _, click in ipairs(clicks) do
+			if click.Button == 1 and not click.Down then
+				if
+					isMouseInRect(
+						vector.create(click.X, click.Y, 0),
+						vector.create(rect.x, rect.y, 0),
+						vector.create(rect.width, rect.height, 0)
+					)
+				then
+					return true
+				end
+			end
+		end
+
+		return false
+	end
+
+	function rendererObject:isMouseInRect(rect: { x: number, y: number, width: number, height: number })
+		local vec = argon:GetMousePosition()
+		return isMouseInRect(
+			vector.create(vec.X, vec.Y, 0),
+			vector.create(rect.x, rect.y, 0),
+			vector.create(rect.width, rect.height, 0)
+		)
+	end
+
+	function rendererObject:StopWatchingKey(RaylibKeyObject)
+		renderer_watching_keys[RaylibKeyObject] = nil
+	end
+
+	-- Returns a mock noise texture (headless: just a table descriptor)
+	function rendererObject:MakeKernelTex(kernelSize: number?)
+		return { _mock = true, kind = "kernel", size = kernelSize or 32 }
+	end
+
+	function rendererObject:MakeNoiseTex(size: number?)
+		return { _mock = true, kind = "noise", size = size or 4 }
+	end
+
+	function rendererObject:MakeDepthBuffer()
+		self.FBO = 0
+		self.Depth = 0
+		self.Normal = 0
+	end
+
+	function rendererObject:SetProfiler(profilerObject)
+		ENGINE_PROFILER = profilerObject
+	end
+
+	function rendererObject:SetGlobalShader(shader)
+		-- no-op in headless
+	end
+
+	function rendererObject:SetIcon(Texture)
+		-- no-op in headless
+	end
+
+	function rendererObject:SetResizable()
+		-- no-op in headless
+	end
+
+	function rendererObject:Include()
+		local caller = getfenv(2)
+		for k, v in pairs(rendererObject) do
+			caller[k] = v
+		end
+	end
+
+	function rendererObject:UseRlCamera(raylibCam)
+		activeCamera = raylibCam
+	end
+
+	function rendererObject:InitAudioDevice()
+		-- no-op in headless
+	end
+
+	function rendererObject:Render3D()
+		local render3DStart = os.clock()
+		local meshCalls = 0
+		local instancedBatches = 0
+		local instancedInstances = 0
+		local sorted3DPool = getSortedPool(renderer_pool.object)
+		perf_stats.scene_roots_3d = #sorted3DPool
+
+		freecam.Update(frameTime, activeCamera, window)
+
+		renderer_eventbus:Fire("Begin3D")
+
+		for _, v in pairs(renderer_hooks.Before3D) do
+			v(rendererObject.RuntimeLibrary)
+		end
+
+		local render3DUpdateStart = os.clock()
+		for _, item in ipairs(sorted3DPool) do
+			local entry = item.entry
+			if entry.render then
+				entry.render(rendererObject.RuntimeLibrary)
+			end
+		end
+		perf_stats.render3d_update_ms = (os.clock() - render3DUpdateStart) * 1000
+
+		meshCalls = draw_calls_count
+		instancedBatches = instanced_draw_calls_count
+
+		if activeCamera then
+			local cf = activeCamera.CFrame
+			local pos = cf.Position
+			local look = cf:GetLookVector()
+			local target = pos + look
+
+			argon:SetCameraPosition(window, {
+				X = pos.X,
+				Y = pos.Y,
+				Z = pos.Z,
+			})
+
+			argon:SetCameraLookAt(window, pos, target)
+		end
+		perf_stats.call3d_ms = 0
+		local callStart = os.clock()
+		if draw_calls_count > 0 or instanced_draw_calls_count > 0 or decal_draw_calls_count > 0 then
+			if Dimension == "3D" then
+				for i = 1, draw_calls_count do
+					local drawCall = renderer_draw_calls[i].mesh
+					local rawMatrix = drawCall.matrix
+					if type(rawMatrix) == "table" and rawMatrix.getraw then
+						rawMatrix = rawMatrix:getraw()
+					end
+
+					argon:DrawMesh(
+						window,
+						drawCall.mesh,
+						{ R = drawCall.color.R, G = drawCall.color.G, B = drawCall.color.B, A = 1 },
+						math.clamp(drawCall.roughness or 0.5, 0, 1),
+						math.clamp(drawCall.metallic or 0.0, 0, 1),
+						rawMatrix,
+						true,
+						true,
+						false,
+						nil,
+						drawCall.MaterialKind or 0
+					)
+
+					if drawCall.End then
+						drawCall.End()
+					end
+				end
+				for i = 1, instanced_draw_calls_count do
+					local drawCall = renderer_instanced_draw_calls[i]
+					instancedInstances += drawCall.count or 0
+					if drawCall.Begin then
+						drawCall.Begin()
+					end
+					if drawCall.End then
+						drawCall.End()
+					end
+					if drawCall.unloadAfterFrame then
+						table.insert(renderer_instance_buffers_to_unload, drawCall.instances)
+					end
+				end
+				for i = 1, decal_draw_calls_count do
+					local drawCall = renderer_decal_draw_calls[i]
+					if drawCall.Begin then
+						drawCall.Begin()
+					end
+					if drawCall.End then
+						drawCall.End()
+					end
+				end
+				for i = 1, #renderer_instance_buffers_to_unload do
+				end
+				table.clear(renderer_instance_buffers_to_unload)
+			end
+		end
+		for i = 1, draw_calls_count do
+			table.clear(renderer_draw_calls)
+			table.clear(renderer_instanced_draw_calls)
+			table.clear(renderer_decal_draw_calls)
+
+			draw_calls_count = 0
+			instanced_draw_calls_count = 0
+			decal_draw_calls_count = 0
+		end
+		for i = 1, instanced_draw_calls_count do
+			local d = renderer_instanced_draw_calls[i]
+			d.mesh = nil
+			d.material = nil
+			d.instances = nil
+			d.Begin = nil
+			d.End = nil
+		end
+		for i = 1, decal_draw_calls_count do
+			local d = renderer_decal_draw_calls[i]
+			d.decal = nil
+			d.transform = nil
+			d.Begin = nil
+			d.End = nil
+		end
+		draw_calls_count = 0
+		instanced_draw_calls_count = 0
+		decal_draw_calls_count = 0
+		perf_stats.call3d_ms = (os.clock() - callStart) * 1000
+
+		for _, item in ipairs(getSortedPool(renderer_pool.gizmos)) do
+			local entry = item.entry
+			if entry.render then
+				entry.render(rendererObject.RuntimeLibrary)
+			end
+		end
+
+		for _, v in pairs(renderer_hooks.After3D) do
+			v(rendererObject.RuntimeLibrary)
+		end
+
+		renderer_eventbus:Fire("End3D")
+
+		perf_stats.mesh_calls = meshCalls
+		perf_stats.instanced_batches = instancedBatches
+		perf_stats.instanced_instances = instancedInstances
+		perf_stats.batches_3d = meshCalls + instancedBatches
+		perf_stats.render3d_ms = (os.clock() - render3DStart) * 1000
+
+		if rendererObject.Enable3DRT and rendererObject.TDRT then
+			rendererObject:DrawRenderTexture(rendererObject.TDRT, actual3DRenderScale < 1)
+		end
+	end
+
+	function rendererObject:Render2D()
+		local uiStart = os.clock()
+
+		for _, v in pairs(renderer_hooks.Before2D) do
+			pcall(v, rendererObject.RuntimeLibrary)
+		end
+
+		local sortedGuiPool = getSortedPool(renderer_pool.gui)
+		perf_stats.gui_roots = #sortedGuiPool
+
+		for _, item in ipairs(sortedGuiPool) do
+			local entry = item.entry
+
+			if entry.render then
+				entry.render(rendererObject.RuntimeLibrary)
+			end
+		end
+
+		for _, v in pairs(renderer_hooks.After2D) do
+			pcall(v, rendererObject.RuntimeLibrary)
+		end
+
+		perf_stats.ui_ms = (os.clock() - uiStart) * 1000
+	end
+
+	function rendererObject:Render2DAbove()
+		local uiStart = os.clock()
+
+		local sortedGuiPool = getSortedPool(renderer_pool.gui_above)
+		perf_stats.gui_roots = #sortedGuiPool
+
+		for _, item in ipairs(sortedGuiPool) do
+			local entry = item.entry
+
+			if entry.render then
+				entry.render(rendererObject.RuntimeLibrary)
+			end
+		end
+
+		perf_stats.ui_ms = (os.clock() - uiStart) * 1000
+	end
+
+	function rendererObject:Resize(newWidth, newHeight)
+		if not newWidth or not newHeight or newWidth <= 0 or newHeight <= 0 then
+			return
+		end
+
+		config.width = newWidth
+		config.height = newHeight
+		rendererObject.Width = newWidth
+		rendererObject.Height = newHeight
+
+		window.Width = newWidth
+		window.Height = newHeight
+
+		argon:ResizePixelBuffer(window, newWidth, newHeight)
+
+		if window._uihandle then
+			argon:DestroySkiaSurface(window._uihandle)
+		end
+		window._uihandle = argon:InitSkiaSurface(newWidth, newHeight)
+
+		if skia_tools_ctx and skia_tools_ctx._uihandle then
+			argon:DestroySkiaSurface(skia_tools_ctx._uihandle)
+		end
+		skia_tools_ctx = argon:CreateSkiaSurface(newWidth, newHeight)
+		rendererObject.AboveCanvas = skia_tools_ctx
+
+		argon:DestroyTexture(skia_tex)
+		skia_tex = argon:CreateTexture({
+			width = newWidth,
+			height = newHeight,
+			renderer = window_renderer,
+			pixelFormat = "ABGR8888",
+			access = "STREAMING",
+		})
+
+		argon:DestroyTexture(skia_tools)
+		skia_tools = argon:CreateTexture({
+			width = newWidth,
+			height = newHeight,
+			renderer = window_renderer,
+			pixelFormat = "ABGR8888",
+			access = "STREAMING",
+		})
+
+		argon:DestroyTexture(filament_tex)
+		filament_tex = argon:CreateTexture({
+			width = newWidth,
+			height = newHeight,
+			renderer = window_renderer,
+			pixelFormat = "ABGR8888",
+			access = "STREAMING",
+		})
+	end
+	function rendererObject:SyncWindowSize()
+		local pixelWidth, pixelHeight = argon:GetWindowPixelSize(window)
+		if pixelWidth and pixelHeight and pixelWidth > 0 and pixelHeight > 0 then
+			rendererObject:Resize(pixelWidth, pixelHeight)
+			return
+		end
+
+		rendererObject:Resize(config.width, config.height)
+	end
+
+	function rendererObject:step(time)
+		local frameStart = os.clock()
+		local updateStart = os.clock()
+
+		rendererObject.RuntimeLibrary.dt = frameTime
+		rendererObject.RuntimeLibrary.time = time
+
+		local resized, newWidth, newHeight, shouldClose, clicks, mx, my, textInputs, keyDowns = argon:PollEvents(window)
+		rendererObject.TextInputs = textInputs
+		rendererObject.Keydowns = keyDowns
+		rendererObject.ShouldClose = shouldClose
+
+		if shouldClose then
+			rendererObject:Stop()
+			return
+		end
+		pending_clicks = clicks or {}
+		rendererObject.PendingClicks = pending_clicks
+		argon:BeginFrame(context)
+
+		if resized and newWidth and newHeight then
+			rendererObject:Resize(newWidth, newHeight)
+		end
+		argon:Clear2D(window, { R = 1, G = 0, B = 0, A = 0 })
+		argon:Clear2D(skia_tools_ctx, { R = 1, G = 0, B = 0, A = 0 })
+
+		argon:SetCameraPosition(window, { X = 5, Y = 5, Z = 5 })
+		rendererObject:Render3D()
+		rendererObject:Render2D()
+		argon:Render3D(window, frameTime)
+		argon:BlitToScreen3D(window, 0, 0, context.Window.Width, context.Window.Height)
+		local pixels = argon:GetPixels(window)
+		argon:UpdateTexture(filament_tex, pixels, context.Window.Width * 4)
+
+		argon:RenderClear(window_renderer)
+
+		-- draw first skia texture
+		argon:UpdateSkiaTexture(skia_tex, window)
+		argon:DrawTexture(window_renderer, skia_tex)
+		-- draw 3d
+		argon:DrawTextureFlipped(window_renderer, filament_tex, rendererObject.tex3d_rect)
+		-- draw second skia texture
+		rendererObject:Render2DAbove()
+		argon:UpdateSkiaTexture(skia_tools, skia_tools_ctx)
+		argon:DrawTexture(window_renderer, skia_tools)
+
+		argon:RenderPresent(window_renderer)
+
+		if ENGINE_PROFILER then
+			ENGINE_PROFILER:NextFrame()
+			ENGINE_PROFILER:Begin("Update")
+		end
+
+		if os.clock() - perf_stats.gc_last >= 10 then
+			local gcStart = os.clock()
+			zune.luau.garbagecollect()
+			perf_stats.gc_ms = (os.clock() - gcStart) * 1000
+			perf_stats.gc_last = os.clock()
+		end
+
+		for _, v in pairs(renderer_hooks.Renderstep) do
+			pcall(v, frameTime)
+		end
+
+		perf_stats.rendereventbus_conns = renderer_eventbus:GetConnectionCount()
+
+		renderer_eventbus:Fire("PreRender", frameTime)
+		renderer_eventbus:Fire("RenderStepped", frameTime)
+
+		local keyboardListenStart = os.clock()
+		perf_stats.input_key_ms = (os.clock() - keyboardListenStart) * 1000
+
+		perf_stats.update_ms = (os.clock() - updateStart) * 1000
+
+		if ENGINE_PROFILER then
+			ENGINE_PROFILER:End()
+			ENGINE_PROFILER:Begin("Render")
+		end
+
+		local dispatchStart = os.clock()
+		perf_stats.dispatch_ms = (os.clock() - dispatchStart) * 1000
+
+		perf_stats.frame_ms = (os.clock() - frameStart) * 1000
+		perf_stats.fps = simulatedFPS
+
+		if ENGINE_PROFILER then
+			ENGINE_PROFILER:SetCounter("FPS", simulatedFPS)
+			ENGINE_PROFILER:End()
+		end
+
+		for _, v in pairs(renderer_hooks.Afterstep) do
+			pcall(v, frameTime)
+		end
+
+		task.wait(0)
+	end
+
+	function rendererObject:Step()
+		local now = os.clock()
+		frameTime = now - lastFrameTime
+		lastFrameTime = now
+
+		time += frameTime
+		frameCount += 1
+
+		rendererObject:step(time)
+	end
+
+	function rendererObject:Run(maxFrames)
+		isRunning = true
+		lastFrameTime = os.clock()
+
+		local frames = 0
+
+		while isRunning do
+			rendererObject:Step()
+
+			frames += 1
+		end
+
+		isRunning = false
+		rendererObject:Shutdown()
+	end
+
+	function rendererObject:Stop()
+		isRunning = false
+	end
+
+	function rendererObject:Shutdown()
+		for _, callback in pairs(renderer_hooks.Shutdown) do
+			local success, result = pcall(callback)
+			if not success then
+				warn(result)
+			end
+		end
+
+		table.clear(renderer_storage.fonts)
+		table.clear(renderer_storage.sounds)
+		table.clear(renderer_pool.gui)
+		table.clear(renderer_pool.object)
+		table.clear(renderer_pool.gizmos)
+
+		if window and window._uihandle then
+			argon:DestroySkiaSurface(window._uihandle)
+		end
+		if skia_tex then
+			argon:DestroyTexture(skia_tex)
+		end
+		argon:Shutdown(window, window_renderer, context)
+		zune.process.exit(0)
+	end
+
+	function rendererObject:GetStats()
+		local gui3DCount = 0
+		local gui2DCount = 0
+		local gizmoCount = 0
+
+		for _ in pairs(renderer_pool.object) do
+			gui3DCount = gui3DCount + 1
+		end
+		for _ in pairs(renderer_pool.gui) do
+			gui2DCount = gui2DCount + 1
+		end
+		for _ in pairs(renderer_pool.gizmos) do
+			gizmoCount = gizmoCount + 1
+		end
+
+		return {
+			fps = simulatedFPS,
+			time = time,
+			frameCount = frameCount,
+			render3DCount = gui3DCount,
+			render2DCount = gui2DCount,
+			gizmoCount = gizmoCount,
+			perf = {
+				frame_ms = perf_stats.frame_ms,
+				update_ms = perf_stats.update_ms,
+				render3d_ms = perf_stats.render3d_ms,
+				ui_ms = perf_stats.ui_ms,
+				batches_3d = perf_stats.batches_3d,
+				mesh_calls = perf_stats.mesh_calls,
+				instanced_batches = perf_stats.instanced_batches,
+				instanced_instances = perf_stats.instanced_instances,
+				gui_roots = perf_stats.gui_roots,
+				scene_roots_3d = perf_stats.scene_roots_3d,
+				input_ms = perf_stats.input_ms,
+				input_key_ms = perf_stats.input_key_ms,
+				rendereventbus_conns = perf_stats.rendereventbus_conns,
+				call3d_ms = perf_stats.call3d_ms,
+				dispatch_ms = perf_stats.dispatch_ms,
+				render3d_update_ms = perf_stats.render3d_update_ms,
+				gc_ms = perf_stats.gc_ms,
+			},
+			windowSize = {
+				width = config.width,
+				height = config.height,
+			},
+			isHeadless = false,
+		}
+	end
+
+	rendererObject:SyncWindowSize()
+
+	return rendererObject
+end
+
+return KiRend

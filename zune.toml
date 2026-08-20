@@ -1,0 +1,52 @@
+# Zune Configuration
+
+# Debug settings
+#  This affects the way Zune handles errors and debug information.
+[runtime.debug]
+detailed_error = true
+
+[workspace.scripts]
+game = "src/main.luau"
+engine = "src/main.luau"
+kinemium = "src/main.luau"
+
+# Compiling settings
+#  This affects all required files and the main file.
+[runtime.luau.options]
+debug_level = 10
+optimization_level = 1
+native_code_gen = true
+
+# Formatter settings
+#  This affects the output of the formatter while printing.
+[resolvers.formatter]
+max_depth = 20
+use_color = true
+table_address = true
+recursive_Table = false
+buffer_max_display = 48
+
+# FFlag settings for Luau
+#  You can use `zune luau list-fflags` to list all available FFlags.
+#[runtime.luau.fflags]
+#DebugCodegenOptSize = false
+
+# Features settings
+#  This affects the features that are enabled in Zune.
+#  mainly builtin libraries and features.
+#[features.builtin]
+#fs = true
+#io = true
+#net = true
+#process = true
+#task = true
+#luau = true
+#serde = true
+#crypto = true
+#datetime = true
+#regex = true
+#sqlite = true
+#require = true
+#random = true
+#thread = true
+#ffi = true

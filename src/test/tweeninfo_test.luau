@@ -1,0 +1,40 @@
+local TweenInfo = require("../environment/datatypes/TweenInfo")
+
+local testing = zune.testing
+local expect = testing.expect
+
+testing.describe("TweenInfo", function()
+	testing.test("Creation with defaults", function()
+		local t = TweenInfo.new()
+		expect(t.Time).toBe(1.0)
+		expect(t.RepeatCount).toBe(0)
+		expect(t.Reverses).toBeFalsy()
+		expect(t.DelayTime).toBe(0)
+	end)
+
+	testing.test("Creation with custom values", function()
+		local t = TweenInfo.new(2.5, "Quad", "InOut", 3, true, 0.5)
+		expect(t.Time).toBe(2.5)
+		expect(t.RepeatCount).toBe(3)
+		expect(t.Reverses).toBeTruthy()
+		expect(t.DelayTime).toBe(0.5)
+	end)
+
+	testing.test("Creation with partial args", function()
+		local t = TweenInfo.new(0.5)
+		expect(t.Time).toBe(0.5)
+		expect(t.RepeatCount).toBe(0)
+		expect(t.Reverses).toBeFalsy()
+		expect(t.DelayTime).toBe(0)
+	end)
+
+	testing.test("ToTable and FromTable roundtrip", function()
+		local a = TweenInfo.new(2.5, "Quad", "InOut", 3, true, 0.5)
+		local tbl = a:ToTable()
+		local b = TweenInfo.FromTable(tbl)
+		expect(b.Time).toBe(2.5)
+		expect(b.RepeatCount).toBe(3)
+		expect(b.Reverses).toBeTruthy()
+		expect(b.DelayTime).toBe(0.5)
+	end)
+end)

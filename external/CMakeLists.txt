@@ -1,0 +1,58 @@
+
+cmake_minimum_required(VERSION 3.25)
+
+project(Kinemium
+    VERSION 0.1.0
+    DESCRIPTION "KinemiumEngineLibs"
+    LANGUAGES C CXX
+)
+
+include(FetchContent)
+
+# Build Release by default for single-config generators
+if(NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
+endif()
+
+# Shared libraries
+set(BUILD_SHARED_LIBS ON CACHE BOOL "" FORCE)
+
+set(KINE_WITH_FILAMENT ON CACHE BOOL "" FORCE)
+set(KINE_BUILD_SHARED ON CACHE BOOL "" FORCE)
+add_subdirectory(kine_render_shim)
+add_subdirectory(kine_skia)
+add_subdirectory(kine_imgui)
+
+# Manifold
+set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
+set(MANIFOLD_DEBUG OFF CACHE BOOL "" FORCE)
+set(MANIFOLD_ASSERT OFF CACHE BOOL "" FORCE)
+set(MANIFOLD_TIMING OFF CACHE BOOL "" FORCE)
+set(MANIFOLD_STRICT OFF CACHE BOOL "" FORCE)
+set(MANIFOLD_NO_IOSTREAM OFF CACHE BOOL "" FORCE)
+set(MANIFOLD_DOWNLOADS ON CACHE BOOL "" FORCE)
+set(MANIFOLD_PAR ON CACHE BOOL "" FORCE)
+set(MANIFOLD_OPTIMIZED ON CACHE BOOL "" FORCE)
+set(MANIFOLD_TEST OFF CACHE BOOL "" FORCE)
+set(MANIFOLD_PYBIND OFF CACHE BOOL "" FORCE)
+set(MANIFOLD_CBIND ON CACHE BOOL "" FORCE)
+set(MANIFOLD_USE_BUILTIN_TBB ON CACHE BOOL "" FORCE)
+set(MANIFOLD_USE_BUILTIN_NANOBIND OFF CACHE BOOL "" FORCE)
+set(TRACY_ENABLE OFF CACHE BOOL "" FORCE)
+set(TRACY_MEMORY_USAGE OFF CACHE BOOL "" FORCE)
+set(MANIFOLD_FUZZ OFF CACHE BOOL "" FORCE)
+set(ASSIMP_ENABLE OFF CACHE BOOL "" FORCE)
+add_subdirectory(manifold)
+
+# Box2D
+add_subdirectory(box2d)
+
+# NFD
+add_subdirectory(nativefiledialog)
+
+# sdl_image
+set(SDLIMAGE_AVIF OFF CACHE BOOL "Support loading AVIF images" FORCE)
+add_subdirectory(SDL_image)
+
+# Jolt Wrapper
+add_subdirectory(kine_jolt)

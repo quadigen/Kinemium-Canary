@@ -1,0 +1,83 @@
+local ColorSequence = require("../environment/datatypes/ColorSequence")
+local ColorSequenceKeypoint = require("../environment/datatypes/ColorSequenceKeypoint")
+local Color3 = require("../environment/datatypes/Color3")
+
+local testing = zune.testing
+local expect = testing.expect
+
+local function near(a, b, epsilon)
+	epsilon = epsilon or 1e-5
+	return math.abs(a - b) <= epsilon
+end
+
+testing.describe("ColorSequence", function()
+	testing.test("Creation with keypoints", function()
+		local kp1 = ColorSequenceKeypoint.new(0, Color3.new(1, 0, 0))
+		local kp2 = ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1))
+		local seq = ColorSequence.new({ kp1, kp2 })
+		expect(#seq.Keypoints).toBe(2)
+	end)
+
+	testing.test("Creation asserts on invalid keypoints", function()
+		local ok = pcall(function()
+			ColorSequence.new({})
+		end)
+		expect(ok).toBeFalsy()
+	end)
+
+	testing.test("Creation sorts keypoints by position", function()
+		local kp1 = ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1))
+		local kp2 = ColorSequenceKeypoint.new(0, Color3.new(1, 0, 0))
+		local seq = ColorSequence.new({ kp1, kp2 })
+		expect(seq.Keypoints[1].Position).toBe(0)
+		expect(seq.Keypoints[2].Position).toBe(1)
+	end)
+
+	testing.test("Evaluate at start position", function()
+		local kp1 = ColorSequenceKeypoint.new(0, Color3.new(1, 0, 0))
+		local kp2 = ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1))
+		local seq = ColorSequence.new({ kp1, kp2 })
+		local c = seq:Evaluate(0)
+		expect(near(c.R, 1)).toBeTruthy()
+		expect(near(c.G, 0)).toBeTruthy()
+		expect(near(c.B, 0)).toBeTruthy()
+	end)
+
+	testing.test("Evaluate at end position", function()
+		local kp1 = ColorSequenceKeypoint.new(0, Color3.new(1, 0, 0))
+		local kp2 = ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1))
+		local seq = ColorSequence.new({ kp1, kp2 })
+		local c = seq:Evaluate(1)
+		expect(near(c.R, 0)).toBeTruthy()
+		expect(near(c.G, 0)).toBeTruthy()
+		expect(near(c.B, 1)).toBeTruthy()
+	end)
+
+	testing.test("Evaluate at midpoint interpolates", function()
+		local kp1 = ColorSequenceKeypoint.new(0, Color3.new(1, 0, 0))
+		local kp2 = ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1))
+		local seq = ColorSequence.new({ kp1, kp2 })
+		local c = seq:Evaluate(0.5)
+		expect(near(c.R, 0.5, 0.01)).toBeTruthy()
+		expect(near(c.G, 0)).toBeTruthy()
+		expect(near(c.B, 0.5, 0.01)).toBeTruthy()
+	end)
+
+	testing.test("Evaluate with single keypoint returns that color", function()
+		local kp1 = ColorSequenceKeypoint.new(0.5, Color3.new(0.5, 0.5, 0.5))
+		local seq = ColorSequence.new({ kp1 })
+		local c = seq:Evaluate(0)
+		expect(near(c.R, 0.5)).toBeTruthy()
+		expect(near(c.G, 0.5)).toBeTruthy()
+		expect(near(c.B, 0.5)).toBeTruthy()
+	end)
+
+	testing.test("ToTable and FromTable roundtrip", function()
+		local kp1 = ColorSequenceKeypoint.new(0, Color3.new(1, 0, 0))
+		local kp2 = ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1))
+		local a = ColorSequence.new({ kp1, kp2 })
+		local tbl = a:ToTable()
+		local b = ColorSequence.FromTable(tbl)
+		expect(#b.Keypoints).toBe(2)
+	end)
+end)
