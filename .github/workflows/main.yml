@@ -78,6 +78,9 @@ jobs:
             -G "$GENERATOR" \
             -DCMAKE_BUILD_TYPE=Release
 
+      - name: Run engine to gather libraries
+        run: zune run engine --cli
+        
       - name: Build engine
         run: zune run build --${{ matrix.flag }}
 
