@@ -7,6 +7,11 @@ project(Kinemium
     LANGUAGES C CXX
 )
 
+if(APPLE)
+    enable_language(OBJC)
+    enable_language(OBJCXX)
+endif()
+
 include(FetchContent)
 
 # Build Release by default for single-config generators
