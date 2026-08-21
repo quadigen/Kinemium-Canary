@@ -81,7 +81,7 @@ static sk_sp<SkTypeface> kine_skia_get_typeface(const char* fontPath)
     #elif defined(__APPLE__)
         sk_sp<SkFontMgr> mgr = SkFontMgr_New_CoreText(nullptr);
     #else
-        sk_sp<SkFontMgr> mgr = SkFontMgr_New_FontConfig(nullptr);
+        sk_sp<SkFontMgr> mgr = SkFontMgr_New_FontConfig(nullptr, nullptr);
     #endif
     sk_sp<SkTypeface> tf;
 

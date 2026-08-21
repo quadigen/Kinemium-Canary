@@ -12,8 +12,7 @@ Kinemium is an independent project not affiliated with, endorsed by,
 or connected to Roblox Corporation. Roblox is a trademark of Roblox Corporation
 
 # Another notice
-This is the renderer-agnostic branch, it contains unstable code that can change anytime, it is
-advised to run the main branch instead.
+This is the `Canary` repository, and includes unstable changes to the engine, Its advised to install a stable release from the [releases](https://github.com/quadigen/Kinemium-Engine/releases) page.
 
 # Features
 ## Datatypes
@@ -137,6 +136,7 @@ Ki-nem-yum!!
 
 # This project uses
 - SDL3
+- SDL_Image
 - Google Filament
 - Google Skia
 - Manifold
