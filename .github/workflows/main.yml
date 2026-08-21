@@ -55,6 +55,7 @@ jobs:
           sudo apt-get install -y \
             libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
             libxi-dev libxfixes-dev libxrender-dev libxss-dev \
+            libxtst-dev \
             libwayland-dev libxkbcommon-dev libegl1-mesa-dev \
             libibus-1.0-dev
 
@@ -68,8 +69,13 @@ jobs:
       - name: Configure CMake
         shell: bash
         run: |
+          if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+            GENERATOR="Unix Makefiles"
+          else
+            GENERATOR="Ninja"
+          fi
           cmake -S external -B external/build \
-            -G Ninja \
+            -G "$GENERATOR" \
             -DCMAKE_BUILD_TYPE=Release
 
       - name: Build engine
