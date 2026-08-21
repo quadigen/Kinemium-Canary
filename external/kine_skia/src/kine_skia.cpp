@@ -17,7 +17,13 @@
 #include "include/core/SkTypeface.h"
 #include "include/core/SkPathBuilder.h"
 #include "include/core/SkFontMetrics.h"
+#if defined(_WIN32)
 #include "include/ports/SkTypeface_win.h"
+#elif defined(__APPLE__)
+#include "include/ports/SkFontMgr_mac_ct.h"
+#else
+#include "include/ports/SkFontMgr_fontconfig.h"
+#endif
 #include "modules/skshaper/include/SkShaper.h"
 #include "modules/skshaper/include/SkShaper_skunicode.h"
 #include "modules/skshaper/include/SkShaper_harfbuzz.h"
@@ -70,7 +76,13 @@ static sk_sp<SkTypeface> kine_skia_get_typeface(const char* fontPath)
         return it->second;
     }
 
-    sk_sp<SkFontMgr> mgr = SkFontMgr_New_DirectWrite();
+    #if defined(_WIN32)
+        sk_sp<SkFontMgr> mgr = SkFontMgr_New_DirectWrite();
+    #elif defined(__APPLE__)
+        sk_sp<SkFontMgr> mgr = SkFontMgr_New_CoreText(nullptr);
+    #else
+        sk_sp<SkFontMgr> mgr = SkFontMgr_New_FontConfig(nullptr);
+    #endif
     sk_sp<SkTypeface> tf;
 
     if (fontPath && fontPath[0] != '\0') {
