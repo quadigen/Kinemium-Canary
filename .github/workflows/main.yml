@@ -57,7 +57,8 @@ jobs:
             libxi-dev libxfixes-dev libxrender-dev libxss-dev \
             libxtst-dev \
             libwayland-dev libxkbcommon-dev libegl1-mesa-dev \
-            libibus-1.0-dev
+            libibus-1.0-dev \
+            libgtk-3-dev
 
       - name: Install Vulkan SDK
         uses: humbletim/setup-vulkan-sdk@v1.2.1
@@ -69,18 +70,18 @@ jobs:
       - name: Configure CMake
         shell: bash
         run: |
-          if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
-            GENERATOR="Unix Makefiles"
-          else
-            GENERATOR="Ninja"
-          fi
           cmake -S external -B external/build \
-            -G "$GENERATOR" \
+            -G Ninja \
             -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build native dependencies
+        shell: bash
+        run: |
+          cmake --build external/build --config Release --parallel
 
       - name: Run engine to gather libraries
         run: zune run engine --cli
-        
+
       - name: Build engine
         run: zune run build --${{ matrix.flag }}
 
