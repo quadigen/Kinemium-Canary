@@ -1,5 +1,6 @@
 name: Build Kinemium Engine
 on:
+  push:
   workflow_dispatch:
 permissions:
   contents: read
