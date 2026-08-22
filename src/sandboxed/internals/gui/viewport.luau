@@ -3,6 +3,7 @@ local StudioThemeService = game:GetService("StudioThemeService")
 local Immco = require("@Immco")
 local theme = StudioThemeService.SelectedTheme
 local Argon = require("@Argon")
+local retained = {}
 
 repeat
 	task.wait()
@@ -26,11 +27,18 @@ local buttons: { EditorButton } = {
 		clicked = function()
 			print("hello world")
 		end,
+		tooltip = "Move a 3D object.",
 	},
-	{ iconPath = "./src/assets/images/icons/Size.png", clicked = function() end },
-	{ iconPath = "./src/assets/images/icons/Rotate.png", clicked = function() end },
-	{ iconPath = "./src/assets/images/icons/ColorEffect.png", clicked = function() end },
+	{ iconPath = "./src/assets/images/icons/Size.png", clicked = function() end, tooltip = "Resize a 3D object." },
+	{ iconPath = "./src/assets/images/icons/Rotate.png", clicked = function() end, tooltip = "Rotate a 3D object." },
+	{
+		iconPath = "./src/assets/images/icons/ColorEffect.png",
+		clicked = function() end,
+		tooltip = "Paint a 3D object.",
+	},
 }
+
+local rects = {}
 
 renderer.Pool.new("2d", function()
 	local dt = renderer.RuntimeLibrary.dt
@@ -45,6 +53,33 @@ renderer.Pool.new("2d", function()
 	end
 	if not absoluteSize then
 		return
+	end
+
+	for _, btn in pairs(buttons) do
+		local btnRect = rects[btn.iconPath]
+		if not btnRect then
+			continue
+		end
+		Immco.Tooltip({
+			RetainedStorage = retained,
+			id = btn.iconPath,
+			renderer = renderer,
+			canvas = renderer.AboveCanvas,
+			window = renderer.Window,
+			theme = theme,
+
+			HoverRect = btnRect,
+			Text = btn.tooltip,
+
+			HoverDelay = 0.4,
+			FadeSpeed = 14,
+			Placement = "right",
+			Offset = { x = 12, y = 40 },
+			Gap = 8,
+			MaxWidth = 220,
+			Padding = 6,
+			CornerRadius = 6,
+		}, dt)
 	end
 
 	Immco.Widget({
@@ -85,12 +120,14 @@ renderer.Pool.new("2d", function()
 
 				callback = function(params)
 					for i, btn in ipairs(buttons) do
-						local isInRect = renderer:isMouseInRect({
+						local btnRect = {
 							x = params.x + 2.5,
 							y = params.y + 5 + ((i - 1) * 40),
 							width = 35,
 							height = 35,
-						})
+						}
+						rects[btn.iconPath] = btnRect
+						local isInRect = renderer:isMouseInRect(btnRect)
 
 						Immco.ImageButton({
 							x = params.x + 2.5,

@@ -1,6 +1,0 @@
-{
-    "aliases": {
-        "roblox": "./src",
-        "polyfill": "./src/polyfill"
-    }
-}

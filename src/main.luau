@@ -66,10 +66,6 @@ if not zembed.IsEmbedded() then
 	end)
 end
 
-if zune.platform.os == "windows" then
-	require("@vcredistInstaller")
-end
-
 if filesystem.exists("./exported") then
 	local read = filesystem.read("./exported/flags.toml")
 	if read then
@@ -225,6 +221,12 @@ _G.printi = function(tbl)
 	for i, _ in pairs(tbl) do
 		iodebug(i)
 	end
+end
+
+if zune.platform.os == "windows" then
+	warn(
+		"Its advised to install Microsoft Visual C++ Redistributable, so FFI libraries can work, You can remove the error using flag --igs.\n  Microsoft Visual C++ Redistributable: https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170"
+	)
 end
 
 -- DEPENDENCIES

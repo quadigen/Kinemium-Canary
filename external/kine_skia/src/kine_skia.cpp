@@ -14,6 +14,7 @@
 #include "include/core/SkRect.h"
 #include "include/core/SkSurface.h"
 #include "include/core/SkTextBlob.h"
+#include "include/core/SkFontScanner.h"
 #include "include/core/SkTypeface.h"
 #include "include/core/SkPathBuilder.h"
 #include "include/core/SkFontMetrics.h"
@@ -23,6 +24,7 @@
 #include "include/ports/SkFontMgr_mac_ct.h"
 #else
 #include "include/ports/SkFontMgr_fontconfig.h"
+#include "include/ports/SkFontScanner_FreeType.h"
 #endif
 #include "modules/skshaper/include/SkShaper.h"
 #include "modules/skshaper/include/SkShaper_skunicode.h"
@@ -81,7 +83,7 @@ static sk_sp<SkTypeface> kine_skia_get_typeface(const char* fontPath)
     #elif defined(__APPLE__)
         sk_sp<SkFontMgr> mgr = SkFontMgr_New_CoreText(nullptr);
     #else
-        sk_sp<SkFontMgr> mgr = SkFontMgr_New_FontConfig(nullptr, nullptr);
+        sk_sp<SkFontMgr> mgr = SkFontMgr_New_FontConfig(nullptr, SkFontScanner_Make_FreeType());
     #endif
     sk_sp<SkTypeface> tf;
 

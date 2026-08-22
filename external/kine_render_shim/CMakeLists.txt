@@ -55,13 +55,6 @@ target_link_libraries(${PROJECT_NAME}
         ${KINE_SDL3_TARGET}
 )
 
-if(APPLE)
-    target_link_libraries(kine_filament_shim PRIVATE
-        "-framework Metal"
-        "-framework MetalKit"
-    )
-endif()
-
 # KINE_BUILD_EXPORTS is only defined while compiling the library itself,
 # so consumers including the header get dllimport instead of dllexport.
 target_compile_definitions(${PROJECT_NAME}

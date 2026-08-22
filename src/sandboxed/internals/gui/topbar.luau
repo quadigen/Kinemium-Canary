@@ -3,6 +3,7 @@ local StudioThemeService = game:GetService("StudioThemeService")
 local Immco = require("@Immco")
 local theme = StudioThemeService.SelectedTheme
 local Argon = require("@Argon")
+local retained = {}
 
 repeat
 	task.wait()
@@ -67,10 +68,10 @@ local buttonCategories = {
 	},
 }
 
-renderer.Pool.new("2d", function()
+renderer.Pool.new("2d", function(lib)
 	local absolutePosition = Topbar.AbsolutePosition
 	local absoluteSize = Topbar.AbsoluteSize
-
+	local dt = lib.dt
 	Topbar.Size = theme.TopbarCoordinates.Size
 	Topbar.Position = theme.TopbarCoordinates.Position
 
@@ -130,16 +131,14 @@ renderer.Pool.new("2d", function()
 
 			local buttonWidth = textWidth + horizontalPadding * 2
 
-			local isHovered = renderer:isMouseInRect({
+			local btnRect = {
 				x = currentX,
 				y = buttonY,
 				width = buttonWidth,
 				height = buttonHeight,
-			})
+			}
 
-			if isHovered then
-				StudioThemeService:ChangeLayoutSettings(nil, 130, nil)
-			end
+			local isHovered = renderer:isMouseInRect(btnRect)
 
 			Immco.TextButton({
 				x = currentX,

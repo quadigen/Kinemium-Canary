@@ -9,5 +9,9 @@ lib.TextButton = require("./Immco/components/TextButton")
 lib.ImageButton = require("./Immco/components/ImageButton")
 lib.Checkbox = require("./Immco/components/Checkbox")
 lib.TextInput = require("./Immco/components/TextInput")
+lib.Scroller = require("./Immco/components/Scroller")
+lib.Dropdown = require("./Immco/components/Dropdown")
+lib.Tooltip = require("./Immco/components/Tooltip")
+lib.ColorPicker = require("./Immco/components/ColorPicker")
 
 return lib

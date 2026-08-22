@@ -17,6 +17,7 @@ export type LanguageRuntime = {
 local console_log = function(log)
 	print(log)
 end
+local ishared = {}
 
 ScriptContext.InitRenderer = function(renderer, signal, datamodel)
 	local requiredCache = {}
@@ -108,9 +109,8 @@ ScriptContext.InitRenderer = function(renderer, signal, datamodel)
 		local runtimes = {
 			Luau = {
 				newthread = function(scriptObject: Instance, datamodel: DataModel)
-					local script_environment
-
-					script_environment = datatypes
+					local script_environment = table.clone(datatypes)
+					script_environment.ishared = ishared
 					script_environment.script = scriptObject
 					script_environment.require = function(target)
 						if type(target) == "string" then

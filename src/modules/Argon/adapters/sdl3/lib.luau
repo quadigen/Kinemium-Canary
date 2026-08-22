@@ -6,6 +6,9 @@ local filament = require("./filamentlib")
 local sdl_image = require("./sdl_image")
 local SDLAdapter = {}
 
+local translation_layers = {}
+local active_translation = nil
+
 export type SDL_Surface = typeof(sdl.structs.SDL_Surface:new())
 
 local SDL_EVENT_QUIT = 0x100
@@ -623,6 +626,15 @@ function SDLAdapter:UpdateSkiaTexture(texture: typedefs.Texture, window: typedef
 	sdl.lib.SDL_UpdateTexture(texture._handle, nil, pixels, pitch)
 end
 
+function SDLAdapter:CreateTranslationLayer(name: string, phrasemap: { string: string })
+	translation_layers[name] = phrasemap
+	active_translation = name
+end
+
+function SDLAdapter:SetActiveTranslationLayer(name: string)
+	active_translation = name
+end
+
 function SDLAdapter:GetMousePosition(): typedefs.Vector
 	local x = zune.ffi.alloc(4)
 	local y = zune.ffi.alloc(4)
@@ -671,7 +683,14 @@ function SDLAdapter:DrawText(window: typedefs.Window, text: string, args: typede
 	if not window_real(window) then
 		return
 	end
-	ui:DrawText(window._uihandle, text, args)
+	local mapped = text
+	local active = translation_layers[active_translation]
+	if active then
+		if active[text] then
+			mapped = active[text]
+		end
+	end
+	ui:DrawText(window._uihandle, mapped, args)
 end
 
 function SDLAdapter:UpdateTexture(texture: typedefs.Texture, pixels, pitch)

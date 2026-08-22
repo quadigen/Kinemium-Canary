@@ -27,6 +27,7 @@ local imageSize = 14 * uiScale
 local groupBottomPadding = 8 * uiScale
 local propertyPadding = 2 * uiScale
 local propertySeparatorWidth = 1 * uiScale
+local searchBoxHeight = 20
 
 local iconPath = "./src/assets/images/icons/"
 local arrowRight = Argon:CreateImageFromPath(iconPath .. "ArrowRight.png")
@@ -233,6 +234,39 @@ local adapters = {
 		input("G", prop_x + boxWidth + 4, "G", { R = 0.08, G = 0.35, B = 0.08 })
 		input("B", prop_x + (boxWidth + 4) * 2, "B", { R = 0.08, G = 0.15, B = 0.35 })
 	end,
+
+	EnumItem = function(prop, firstObj, prop_x, prop_y, dt, width)
+		local val = prop.value
+		if val.EnumType then
+			local items = val.EnumType:GetEnumItems()
+			local result = {}
+
+			for _, item in pairs(items) do
+				table.insert(result, item.Name)
+			end
+
+			Immco.Dropdown({
+				RetainedStorage = inspectorStorage,
+				id = prop.name .. "_dropdown",
+				renderer = renderer,
+				window = renderer.Window,
+				theme = theme,
+
+				x = prop_x,
+				y = prop_y,
+				width = width,
+				height = 16,
+
+				Options = result,
+				Placeholder = val.Name,
+				MaxVisibleOptions = 4,
+
+				OnChanged = function(index, chosenValue)
+					firstObj[prop.name] = val.EnumType[chosenValue]
+				end,
+			}, dt)
+		end
+	end,
 }
 
 renderer.Pool.new("2d", function()
@@ -258,211 +292,260 @@ renderer.Pool.new("2d", function()
 		title = "Inspector",
 		theme = theme,
 		engine_window = renderer.Window,
-
 		callback = function(params)
-			local object = Selection.Get()
+			Immco.Scroller({
+				id = "main-explorer",
 
-			if not object or not object[1] then
-				return
-			end
+				x = params.x,
+				y = params.y,
+				width = params.width,
+				height = params.height,
 
-			local firstObj = object[1]
+				ViewHeight = params.height - 40,
+				ContentHeight = 500,
 
-			local grouped = {}
-			local seenCategories = {}
+				ScrollSpeed = 50,
+				ScrollLerpSpeed = 20,
 
-			for property, value in pairs(firstObj:GetProperties()) do
-				local category = PropertyCategories.getPropertyCategory(property) or "Uncategorized"
+				renderer = renderer,
+				window = renderer.Window,
+				theme = theme,
 
-				if type(value) == "function" then
-					continue
-				end
+				RetainedStorage = inspectorStorage,
+				callback = function(params)
+					Immco.TextInput({
+						x = params.x + 6,
+						y = params.y + 4,
+						width = params.width - 12 * uiScale,
+						height = searchBoxHeight,
+						id = "InspectorSearch",
+						RetainedStorage = inspectorStorage,
+						renderer = renderer,
+						theme = theme,
 
-				local list = grouped[category]
-				if not list then
-					list = {}
-					grouped[category] = list
-				end
+						Color = { R = 0.15, G = 0.15, B = 0.15, A = 1 },
+						FocusColor = { R = 0.2, G = 0.2, B = 0.25, A = 1 },
+						TextColor = theme.TextColor,
+						PlaceholderColor = { R = 0.5, G = 0.5, B = 0.5, A = 1 },
 
-				list[#list + 1] = { name = property, value = value }
-				seenCategories[category] = true
-			end
+						placeholder = "Search Properties..",
+						OnSubmit = function(text) end,
 
-			for _, list in pairs(grouped) do
-				table.sort(list, function(a, b)
-					return a.name < b.name
-				end)
-			end
+						engine_window = renderer.Window,
+					}, dt)
 
-			local orderedCategories = {}
-			local placed = {}
+					local object = Selection.Get()
 
-			for _, category in ipairs(categoryOrder) do
-				if seenCategories[category] then
-					orderedCategories[#orderedCategories + 1] = category
-					placed[category] = true
-				end
-			end
+					if not object or not object[1] then
+						return
+					end
 
-			local leftovers = {}
-			for category in pairs(seenCategories) do
-				if not placed[category] then
-					leftovers[#leftovers + 1] = category
-				end
-			end
-			table.sort(leftovers)
+					local firstObj = object[1]
 
-			for _, category in ipairs(leftovers) do
-				orderedCategories[#orderedCategories + 1] = category
-			end
+					local grouped = {}
+					local seenCategories = {}
 
-			-- render
-			local rowY = params.y + 28
+					for property, value in pairs(firstObj:GetProperties()) do
+						local category = PropertyCategories.getPropertyCategory(property) or "Uncategorized"
 
-			for _, category in ipairs(orderedCategories) do
-				local props = grouped[category]
-				local isExpanded = categoryExpanded[category]
-				local propCount = isExpanded and #props or 0
+						if type(value) == "function" then
+							continue
+						end
 
-				local x = params.x + (6 * uiScale)
-				local groupTop = rowY - (18 * uiScale)
-				local width = params.width - (12 * uiScale)
-				local groupHeight = headerHeight + (propCount * rowHeight) + groupBottomPadding
+						local list = grouped[category]
+						if not list then
+							list = {}
+							grouped[category] = list
+						end
 
-				Argon:Save(renderer.Window)
+						list[#list + 1] = { name = property, value = value }
+						seenCategories[category] = true
+					end
 
-				Argon:ClipRoundRect(renderer.Window, {
-					x = x,
-					y = groupTop,
-					width = width,
-					height = groupHeight,
-				}, 6, 6)
+					for _, list in pairs(grouped) do
+						table.sort(list, function(a, b)
+							return a.name < b.name
+						end)
+					end
 
-				Argon:DrawRectangle(renderer.Window, {
-					x = x,
-					y = groupTop,
-					width = width,
-					height = groupHeight,
-					Color = Argon:RGBA(45, 45, 45),
-				})
+					local orderedCategories = {}
+					local placed = {}
 
-				Argon:DrawRectangle(renderer.Window, {
-					x = x,
-					y = groupTop,
-					width = width,
-					height = headerHeight,
-					Color = Argon:RGBA(33, 33, 33),
-					isOutline = true,
-				})
+					for _, category in ipairs(categoryOrder) do
+						if seenCategories[category] then
+							orderedCategories[#orderedCategories + 1] = category
+							placed[category] = true
+						end
+					end
 
-				Argon:DrawRectangle(renderer.Window, {
-					x = x,
-					y = groupTop,
-					width = width,
-					height = headerHeight,
-					Color = Argon:RGBA(45, 45, 45),
-				})
+					local leftovers = {}
+					for category in pairs(seenCategories) do
+						if not placed[category] then
+							leftovers[#leftovers + 1] = category
+						end
+					end
+					table.sort(leftovers)
 
-				Argon:Restore(renderer.Window)
+					for _, category in ipairs(leftovers) do
+						orderedCategories[#orderedCategories + 1] = category
+					end
 
-				-- toggle arrow
-				local arrow = isExpanded and expandedIcon or arrowRight
+					-- render
+					local rowY = params.y + 28 + searchBoxHeight
 
-				Immco.Image({
-					x = x + (6 * uiScale),
-					y = rowY - (14 * uiScale),
-					width = imageSize,
-					height = imageSize,
-					Image = arrow,
-					theme = theme,
-					engine_window = renderer.Window,
-				}, dt)
+					for _, category in ipairs(orderedCategories) do
+						local props = grouped[category]
+						local isExpanded = categoryExpanded[category]
+						local propCount = isExpanded and #props or 0
 
-				-- header label
-				Immco.Text({
-					x = x + (6 * uiScale) + imageSize + (6 * uiScale),
-					y = rowY,
-					TextSize = headerTextSize,
-					theme = theme,
-					Font = Argon:CreateFont(theme.Font),
-					text = category,
-					Color = theme.TextColor,
-					engine_window = renderer.Window,
-				}, dt)
+						local x = params.x + (6 * uiScale)
+						local groupTop = rowY - (18 * uiScale)
+						local width = params.width - (12 * uiScale)
+						local groupHeight = headerHeight + (propCount * rowHeight) + groupBottomPadding
 
-				-- whole header row is clickable to toggle
-				if
-					renderer:HasClicked({
-						x = x,
-						y = groupTop,
-						width = width,
-						height = headerHeight,
-					})
-				then
-					categoryExpanded[category] = not isExpanded
-				end
+						Argon:Save(renderer.Window)
 
-				rowY += headerHeight
-
-				if isExpanded then
-					local propertiesTop = rowY - 15
-					local propertiesHeight = #props * rowHeight
-
-					Argon:Save(renderer.Window)
-
-					Argon:ClipRoundRect(renderer.Window, {
-						x = x,
-						y = propertiesTop,
-						width = width,
-						height = propertiesHeight,
-					}, 6, 6)
-
-					for _, prop in ipairs(props) do
-						local truncated = truncate(prop.name, 15)
-
-						local propertyX = x + propertyPadding
-						local propertyY = rowY - 15
-						local propertyWidth = width - (propertyPadding * 2)
-						local propertyHeight = rowHeight
-
-						local separatorX = propertyX + (propertyWidth * 0.5)
+						Argon:ClipRoundRect(renderer.Window, {
+							x = x,
+							y = groupTop,
+							width = width,
+							height = groupHeight,
+						}, 6, 6)
 
 						Argon:DrawRectangle(renderer.Window, {
-							x = separatorX,
-							y = propertyY,
-							width = propertySeparatorWidth,
-							height = propertyHeight,
-							Color = Argon:RGBA(60, 60, 60),
+							x = x,
+							y = groupTop,
+							width = width,
+							height = groupHeight,
+							Color = Argon:RGBA(45, 45, 45),
 						})
 
-						-- Property name
+						Argon:DrawRectangle(renderer.Window, {
+							x = x,
+							y = groupTop,
+							width = width,
+							height = headerHeight,
+							Color = Argon:RGBA(33, 33, 33),
+							isOutline = true,
+						})
+
+						Argon:DrawRectangle(renderer.Window, {
+							x = x,
+							y = groupTop,
+							width = width,
+							height = headerHeight,
+							Color = Argon:RGBA(45, 45, 45),
+						})
+
+						Argon:Restore(renderer.Window)
+
+						-- toggle arrow
+						local arrow = isExpanded and expandedIcon or arrowRight
+
+						Immco.Image({
+							x = x + (6 * uiScale),
+							y = rowY - (14 * uiScale),
+							width = imageSize,
+							height = imageSize,
+							Image = arrow,
+							theme = theme,
+							engine_window = renderer.Window,
+						}, dt)
+
+						-- header label
 						Immco.Text({
-							x = propertyX + contentPadding,
+							x = x + (6 * uiScale) + imageSize + (6 * uiScale),
 							y = rowY,
-							TextSize = textSize,
+							TextSize = headerTextSize,
 							theme = theme,
 							Font = Argon:CreateFont(theme.Font),
-							text = tostring(truncated),
+							text = category,
 							Color = theme.TextColor,
 							engine_window = renderer.Window,
 						}, dt)
 
-						local prop_x = separatorX + (4 * uiScale)
-						local prop_y = rowY - 15
-
-						if adapters[typeof(prop.value)] then
-							adapters[typeof(prop.value)](prop, firstObj, prop_x, prop_y, dt, (propertyWidth * 0.5) - 10)
+						-- whole header row is clickable to toggle
+						if
+							renderer:HasClicked({
+								x = x,
+								y = groupTop,
+								width = width,
+								height = headerHeight,
+							})
+						then
+							categoryExpanded[category] = not isExpanded
 						end
 
-						rowY += rowHeight
+						rowY += headerHeight
+
+						if isExpanded then
+							local propertiesTop = rowY - 15
+							local propertiesHeight = #props * rowHeight
+
+							Argon:Save(renderer.Window)
+
+							Argon:ClipRoundRect(renderer.Window, {
+								x = x,
+								y = propertiesTop,
+								width = width,
+								height = propertiesHeight,
+							}, 6, 6)
+
+							for _, prop in ipairs(props) do
+								local truncated = truncate(prop.name, 15)
+
+								local propertyX = x + propertyPadding
+								local propertyY = rowY - 15
+								local propertyWidth = width - (propertyPadding * 2)
+								local propertyHeight = rowHeight
+
+								local separatorX = propertyX + (propertyWidth * 0.5)
+
+								Argon:DrawRectangle(renderer.Window, {
+									x = separatorX,
+									y = propertyY,
+									width = propertySeparatorWidth,
+									height = propertyHeight,
+									Color = Argon:RGBA(60, 60, 60),
+								})
+
+								-- Property name
+								Immco.Text({
+									x = propertyX + contentPadding,
+									y = rowY,
+									TextSize = textSize,
+									theme = theme,
+									Font = Argon:CreateFont(theme.Font),
+									text = tostring(truncated),
+									Color = theme.TextColor,
+									engine_window = renderer.Window,
+								}, dt)
+
+								local prop_x = separatorX + (4 * uiScale)
+								local prop_y = rowY - 15
+
+								if adapters[typeof(prop.value)] then
+									adapters[typeof(prop.value)](
+										prop,
+										firstObj,
+										prop_x,
+										prop_y,
+										dt,
+										(propertyWidth * 0.5) - 10
+									)
+								end
+
+								rowY += rowHeight
+							end
+
+							Argon:Restore(renderer.Window)
+						end
+
+						rowY += groupBottomPadding
+						rowY += 6 * uiScale
 					end
-
-					Argon:Restore(renderer.Window)
-				end
-
-				rowY += groupBottomPadding
-				rowY += 6 * uiScale
-			end
+				end,
+			}, dt)
 		end,
 	}, dt)
 end)

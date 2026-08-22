@@ -9,6 +9,11 @@ local platform = zune.platform
 local structs = require("./sdl_image/structs")
 local funcs = require("./sdl_image/funcs")
 local constants = require("./sdl_image/constants")
+local zembed = require("@zembed")
+
+if zembed.IsEmbedded() then
+	dll = "./"
+end
 
 local libname
 if platform.os == "windows" then

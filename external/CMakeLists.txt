@@ -14,11 +14,6 @@ endif()
 
 include(FetchContent)
 
-# Build Release by default for single-config generators
-if(NOT CMAKE_CONFIGURATION_TYPES)
-    set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
-endif()
-
 # Shared libraries
 set(BUILD_SHARED_LIBS ON CACHE BOOL "" FORCE)
 if(WIN32)

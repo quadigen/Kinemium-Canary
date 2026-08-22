@@ -25,6 +25,67 @@ export type WidgetParams = {
 	callback: () -> ()?,
 }
 
+export type ColorPickerParams = {
+	RetainedStorage: { [any]: any },
+	id: any,
+	renderer: any,
+	window: any,
+	theme: any,
+	x: number,
+	y: number,
+	Size: number?,
+	HueBarWidth: number?,
+	ShowAlpha: boolean?,
+	AlphaBarWidth: number?,
+	Gap: number?,
+	Resolution: number?,
+	HueSegments: number?,
+	CheckerSize: number?,
+	InitialColor: RGBA,
+	OnChanged: ((color: RGBA) -> ())?,
+	CornerRadius: number?,
+	ShowPreview: boolean?,
+	ShowHex: boolean?,
+	PreviewHeight: number?,
+}
+
+export type ScrollerParams = {
+	x: number,
+	y: number,
+	width: number,
+	height: number,
+
+	id: string,
+	renderer: any,
+	window: typedefs.Window,
+	theme: any,
+	RetainedStorage: { [string]: any },
+
+	ContentHeight: number?,
+	ViewHeight: number?,
+	Orientation: ("vertical" | "horizontal")?,
+
+	ScrollSpeed: number?,
+	ScrollLerpSpeed: number?,
+	MinThumbSize: number?,
+	CornerRadius: number?,
+
+	TrackColor: RGBA?,
+	ThumbColor: RGBA?,
+	ThumbHoverColor: RGBA?,
+	ThumbActiveColor: RGBA?,
+
+	ScrollRegion: { x: number, y: number, width: number, height: number }?,
+
+	InitialScroll: number?,
+	OnScroll: ((number) -> ())?,
+
+	ContentX: number?,
+	ContentY: number?,
+	ContentWidth: number?,
+	callback: ((any) -> ())?,
+}
+
 export type BooleanParams = {
 	engine_window: any,
 	x: number,
