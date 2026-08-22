@@ -223,6 +223,8 @@ if(KINE_WITH_FILAMENT)
                 "-framework CoreVideo"
                 "-framework IOKit"
                 "-framework QuartzCore"
+                "-framework Metal"
+                "-framework MetalKit"
         )
     else()
         # GNU ld cares about static-lib ordering because these archives

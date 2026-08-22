@@ -44,25 +44,29 @@ end
 
 filesystem.createFolder(".", "vendor")
 
-local headerfiles = {}
-
-local seen = {}
-
 if not zembed.IsEmbedded() then
+	local suffix = zune.ffi.suffix -- e.g. "so" or "dylib"
+
 	Walk.Walk("./external", function(path, entry)
-		if entry.kind == "file" and entry.extension == `.{zune.ffi.suffix}` then
-			if filesystem.exists("vendor/" .. entry.name) then
-				return
-			end
-			fs.copy(path, "vendor/" .. entry.name)
-			print("Copied " .. path)
-		elseif entry.extension == `.h` then
-			local dir = path:match("(.+)[/\\][^/\\]+$")
-			if dir and not seen[dir] then
-				seen[dir] = true
-				table.insert(headerfiles, dir)
-			end
+		if entry.kind ~= "file" and entry.kind ~= "sym_link" then
+			return
 		end
+
+		if not string.find(entry.name, `%.{suffix}%f[%A]`) then
+			return
+		end
+
+		local destName = entry.name
+		if string.sub(destName, 1, 3) == "lib" then
+			destName = string.sub(destName, 4)
+		end
+
+		if filesystem.exists("vendor/" .. destName) then
+			return
+		end
+
+		fs.copy(path, "vendor/" .. destName)
+		print("Copied " .. path .. " -> vendor/" .. destName)
 	end)
 end
 
