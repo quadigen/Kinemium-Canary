@@ -102,6 +102,7 @@ if(NOT KINE_SKIA_DIR AND NOT KINE_SKIA_PREBUILT_LIBRARY_PROVIDED)
         "skia_use_freetype=true"
         "skia_use_system_freetype2=false"
         "skia_use_harfbuzz=true"
+        "skia_use_dng_sdk=false"
     )
 
     if(WIN32)
@@ -167,6 +168,7 @@ elseif(APPLE)
             "-framework CoreFoundation"
             "-framework CoreGraphics"
             "-framework CoreText"
+            "-framework CoreServices"
     )
 else()
     target_link_libraries(kine_skia PRIVATE pthread dl m)

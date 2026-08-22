@@ -45,18 +45,30 @@ end
 filesystem.createFolder(".", "vendor")
 
 if not zembed.IsEmbedded() then
-	local suffix = zune.ffi.suffix -- e.g. "so" or "dylib"
+	local suffix = zune.ffi.suffix
 
 	Walk.Walk("./external", function(path, entry)
 		if entry.kind ~= "file" and entry.kind ~= "sym_link" then
 			return
 		end
 
-		if not string.find(entry.name, `%.{suffix}%f[%A]`) then
+		local matchEnd = nil
+		local _, endPos = string.find(entry.name, `%.{suffix}$`)
+		if endPos then
+			matchEnd = endPos
+		else
+			local _, endPos2 = string.find(entry.name, `%.{suffix}%.%d`)
+			if endPos2 then
+				matchEnd = endPos2 - 2
+			end
+		end
+
+		if not matchEnd then
 			return
 		end
 
-		local destName = entry.name
+		local destName = string.sub(entry.name, 1, matchEnd)
+
 		if string.sub(destName, 1, 3) == "lib" then
 			destName = string.sub(destName, 4)
 		end
