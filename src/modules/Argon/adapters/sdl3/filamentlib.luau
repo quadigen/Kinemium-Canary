@@ -32,6 +32,68 @@ function filamentAdapter:SetCameraLookAt(window: typedefs.Window, position: type
 	)
 end
 
+function filamentAdapter:CreateDecal(
+	window: typedefs.Window,
+	width,
+	height,
+	texture: FFIPointerType,
+	offsetStudsU,
+	offsetStudsV,
+	studsPerTileU,
+	studsPerTileV
+): typedefs.Decal
+	local handle = window._3dhandle
+	local decal = filament.lib.Kine_Filament_CreateDecal(
+		handle,
+		width,
+		height,
+		texture,
+		offsetStudsU,
+		offsetStudsV,
+		studsPerTileU,
+		studsPerTileV,
+		false,
+		false,
+		false
+	)
+	return { _handle = decal }
+end
+
+function filamentAdapter:RemoveDecal(window: typedefs.Window, decal: typedefs.Decal)
+	if not decal then
+		return
+	end
+	filament.lib.Kine_Filament_RemoveDecal(window._3dhandle, decal._handle)
+end
+
+function filamentAdapter:SetDecalTransform(window: typedefs.Window, decal: typedefs.Decal, mat4: any)
+	local handle = window._3dhandle
+
+	filament.lib.Kine_Filament_SetDecalTransform(handle, decal._handle, mat4)
+end
+
+function filamentAdapter:SetDecalTiling(
+	window: typedefs.Window,
+	decal: typedefs.Decal,
+	width: number,
+	height: number,
+	offsetStudsU: number?,
+	offsetStudsV: number?,
+	studsPerTileU: number?,
+	studsPerTileV: number?
+)
+	filament.lib.Kine_Filament_SetDecalTiling(
+		window._3dhandle,
+		decal._handle,
+		width,
+		height,
+		offsetStudsU or 0,
+		offsetStudsV or 0,
+		studsPerTileU or 0,
+		studsPerTileV or 0
+	)
+end
+
 function filamentAdapter:Resize3D(window: typedefs.Window, width, height)
 	local handle = window._3dhandle
 	filament.lib.Kine_Filament_Resize(handle, width, height)
@@ -70,6 +132,36 @@ function filamentAdapter:CreateTextureFromImage(window: typedefs.Window, image: 
 	)
 end
 
+function filamentAdapter:Destroy3DTexture(window: typedefs.Window, texture: FFIPointerType?)
+	if not texture then
+		return
+	end
+	filament.lib.Kine_Filament_DestroyTex(window._3dhandle, texture)
+end
+
+function filamentAdapter:CreateMaterialTextureFromImages(
+	window: typedefs.Window,
+	albedo: typedefs.Image,
+	normal: typedefs.Image?,
+	orm: typedefs.Image?
+)
+	return filament.lib.Kine_Filament_CreatePbrTexFromPixels(
+		window._3dhandle,
+		albedo.width,
+		albedo.height,
+		albedo.pitch,
+		albedo.pixels,
+		normal and normal.width or 0,
+		normal and normal.height or 0,
+		normal and normal.pitch or 0,
+		normal and normal.pixels or nil,
+		orm and orm.width or 0,
+		orm and orm.height or 0,
+		orm and orm.pitch or 0,
+		orm and orm.pixels or nil
+	)
+end
+
 function filamentAdapter:CreateMesh(window: typedefs.Window, meshType: "cube" | "sphere" | "pyramid"): typedefs.Mesh
 	local map = {
 		["cube"] = 1,
@@ -91,7 +183,8 @@ function filamentAdapter:DrawMesh(
 	receiveShadow: boolean,
 	culling: boolean,
 	texture: any,
-	materialKind: number
+	materialKind: number,
+	materialTileScale: number?
 )
 	filament.lib.Kine_Filament_DrawMeshEx(
 		window._3dhandle,
@@ -102,7 +195,7 @@ function filamentAdapter:DrawMesh(
 		color.B,
 		roughness,
 		metallic,
-		1,
+		materialTileScale or 1,
 		0,
 		mat4,
 		castshadow and 1 or 0,

@@ -687,8 +687,9 @@ function KiRend.new(config: KiRendConf)
 						true,
 						true,
 						false,
-						nil,
-						drawCall.MaterialKind or 0
+						drawCall.texture,
+						drawCall.MaterialKind or 0,
+						drawCall.MaterialTileScale or 1
 					)
 
 					if drawCall.End then
@@ -923,6 +924,7 @@ function KiRend.new(config: KiRendConf)
 		argon:DrawTextureFlipped(window_renderer, filament_tex, rendererObject.tex3d_rect)
 		-- draw second skia texture
 		rendererObject:Render2DAbove()
+
 		argon:UpdateSkiaTexture(skia_tools, skia_tools_ctx)
 		argon:DrawTexture(window_renderer, skia_tools)
 

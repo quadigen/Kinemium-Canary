@@ -105,7 +105,29 @@ KinemiumFontService.InitRenderer = function(renderer, renderer_signal)
 	local loadedFonts = {}
 	local loadingFonts = {}
 
-	local fonts = zune.fs.entries("./src/assets/fonts/")
+	local function getFontEntries()
+		if not zembed.IsEmbedded() then
+			return zune.fs.entries("./src/assets/fonts/")
+		end
+
+		local fonts = {}
+		local seen = {}
+
+		for _, filePath in pairs(zembed.GetAssetFilesUnder("./src/assets/fonts/")) do
+			local fileName = filePath:gsub([[\]], "/"):match("^src/assets/fonts/([^/]+)$")
+			if fileName and not seen[fileName] then
+				seen[fileName] = true
+				table.insert(fonts, {
+					kind = "file",
+					name = fileName,
+				})
+			end
+		end
+
+		return fonts
+	end
+
+	local fonts = getFontEntries()
 
 	local function normalizeName(name)
 		name = name:gsub("%-", " ")

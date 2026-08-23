@@ -8,10 +8,10 @@ local funcs = require("./filament/funcs")
 local structs = require("./filament/structs")
 local const = require("./filament/constants")
 
-local libLocation = "./vendor/kine_filament_shim." .. ffi.suffix
+local libLocation = "./vendor/KinemiumLibs." .. ffi.suffix
 local zembed = require("@zembed")
 if zembed.IsEmbedded() then
-	libLocation = zembed.RuntimePath("kine_filament_shim." .. ffi.suffix)
+	libLocation = zembed.RuntimePath("KinemiumLibs." .. ffi.suffix)
 end
 
 local lib = ffi.dlopen(libLocation, funcs)

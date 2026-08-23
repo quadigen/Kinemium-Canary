@@ -3,9 +3,7 @@ local Vector3 = require("@Vector3")
 local Color3 = require("@Color3")
 local CFrame = require("@CFrame")
 local Enum = require("@EnumMap")
-local adapter = require("@RaylibAdapter")
-local structs = adapter.structs
-local filament = require("@Filament")
+local argon = require("@Argon")
 
 local propTable = {
 	Transparency = 0,
@@ -55,24 +53,6 @@ local function getFaceCFrame(cf, size, face)
 	return cf
 end
 
-local function buildBaseDecal(ctx, width, height, texture, offsetStudsU, offsetStudsV, studsPerTileU, studsPerTileV)
-	local decal = filament.lib.Kine_Filament_CreateDecal(
-		ctx,
-		width,
-		height,
-		texture,
-		offsetStudsU,
-		offsetStudsV,
-		studsPerTileU,
-		studsPerTileV,
-		false,
-		true,
-		true
-	)
-
-	return decal
-end
-
 local function applyFaceOffset(cf, offset)
 	if type(offset) ~= "table" or not offset.__type then
 		return cf
@@ -95,33 +75,39 @@ return {
 
 		local activeDecal = nil
 
-		local function load()
-			if activeDecal then
-				filament.lib.Kine_Filament_RemoveDecal(renderer.FilamentContext, activeDecal)
+		local function removeActiveDecal()
+			if activeDecal and renderer and renderer.Window then
+				argon:RemoveDecal(renderer.Window, activeDecal)
+				activeDecal = nil
 			end
-			local load = adapter.lib.LoadImage(instance.Texture)
-			local tex = adapter.lib.LoadTextureFromImage(load)
-			if load then
-				activeDecal = buildBaseDecal(
-					renderer.FilamentContext,
-					32,
-					32,
+		end
+
+		local function load()
+			removeActiveDecal()
+			if not renderer or not renderer.Window then
+				return
+			end
+			local tex = argon:CreateDecalTexture(renderer.Window, instance.Texture)
+			if tex then
+				activeDecal = argon:CreateDecal(
+					renderer.Window,
+					1,
+					1,
 					tex,
 					instance.OffsetStudsU,
 					instance.OffsetStudsV,
 					instance.StudsPerTileU,
 					instance.StudsPerTileV
 				)
-				adapter.lib.UnloadImage(load)
 			end
 		end
 
 		load()
 
 		local renderId
-		if renderer and activeDecal then
+		if renderer then
 			renderId = renderer.Pool.new("3d", function()
-				if instance.Transparency >= 1 then
+				if not activeDecal or instance.Transparency >= 1 then
 					return
 				end
 
@@ -156,11 +142,11 @@ return {
 				end
 
 				cf = applyFaceOffset(cf, instance.Position)
-				local matrix = cf:ToRaylibMatrixScale(scale, structs)
+				local matrix = cf:ToEngineMatrix(scale)
 
-				filament.lib.Kine_Filament_SetDecalTransform(renderer.FilamentContext, activeDecal, matrix)
-				filament.lib.Kine_Filament_SetDecalTiling(
-					renderer.FilamentContext,
+				argon:SetDecalTransform(renderer.Window, activeDecal, matrix)
+				argon:SetDecalTiling(
+					renderer.Window,
 					activeDecal,
 					width,
 					height,
@@ -181,9 +167,8 @@ return {
 		instance.Destroying:Connect(function()
 			if renderId and renderer and renderer.Pool then
 				renderer.Pool.Destroy(renderId)
-				adapter.lib.UnloadImage(load)
-				filament.lib.Kine_Filament_RemoveDecal(renderer.FilamentContext, activeDecal)
 			end
+			removeActiveDecal()
 		end)
 
 		return instance

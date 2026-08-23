@@ -18,7 +18,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(USE_ASSERTS OFF CACHE BOOL "" FORCE)
 set(DOUBLE_PRECISION ON CACHE BOOL "" FORCE)
 set(GENERATE_DEBUG_SYMBOLS ON CACHE BOOL "" FORCE)
-set(OVERRIDE_CXX_FLAGS ON CACHE BOOL "" FORCE)
+set(OVERRIDE_CXX_FLAGS OFF CACHE BOOL "" FORCE)
+set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE BOOL "" FORCE)
 set(CROSS_PLATFORM_DETERMINISTIC OFF CACHE BOOL "" FORCE)
 set(FLOATING_POINT_EXCEPTIONS_ENABLED OFF CACHE BOOL "" FORCE)
 set(CPP_EXCEPTIONS_ENABLED OFF CACHE BOOL "" FORCE)
@@ -74,10 +75,18 @@ add_subdirectory(
 )
 
 # ---------------------------------------------------------
-# Jolt Wrapper DLL
+# Jolt Wrapper
 # ---------------------------------------------------------
 
-add_library(JoltWrapper SHARED
+option(KINE_BUILD_SHARED "Build Kinemium native wrappers as shared libraries" ON)
+
+if(KINE_BUILD_SHARED)
+    set(KINE_JOLT_WRAPPER_LIBRARY_TYPE SHARED)
+else()
+    set(KINE_JOLT_WRAPPER_LIBRARY_TYPE STATIC)
+endif()
+
+add_library(JoltWrapper ${KINE_JOLT_WRAPPER_LIBRARY_TYPE}
     src/jolt_wrapper.cpp
 )
 
@@ -104,10 +113,8 @@ set_target_properties(JoltWrapper PROPERTIES
     OUTPUT_NAME "JoltWrapper"
 )
 
-# Jolt is built with OVERRIDE_CXX_FLAGS=ON which forces /MT (static CRT).
-# JoltWrapper must use the same CRT to avoid LNK2038 mismatches.
 if(MSVC)
     set_property(TARGET JoltWrapper PROPERTY
-        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL"
     )
 endif()

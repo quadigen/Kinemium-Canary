@@ -149,7 +149,7 @@ Lighting.InitRenderer = function(renderer, renderer_signal, datamodel)
 
 	argon:SetSkyAtmosphere(
 		renderer.Window,
-		argon:Vector3(-0.45, -0.80, -0.35),
+		argon:Vector3(-0.45, 0.80, -0.35),
 		argon:RGBA(77, 122, 230),
 		argon:RGBA(191, 214, 245),
 		argon:RGBA(46, 51, 61),

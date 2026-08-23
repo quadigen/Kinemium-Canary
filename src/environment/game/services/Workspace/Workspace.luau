@@ -3,6 +3,7 @@ local Workspace = Instance.new("Workspace")
 local Enum = require("@EnumMap")
 local CFrame = require("@CFrame")
 local argon = require("@argon")
+local zembed = require("@zembed")
 
 export type KinemiumCFrame = typeof(CFrame.new())
 Workspace._Intents = Enum.PluginIntents.Graphic
@@ -30,17 +31,32 @@ Workspace.InitRenderer = function(renderer, signal, game)
 	local function fillMaterialTex(WorkspaceMaterialMode)
 		if WorkspaceMaterialMode == Enum.WorkspaceMaterialMode.Compressed then
 			local path = "./src/assets/materials/compressed"
-			local entries = zune.fs.entries(path)
+			local entries = {}
+
+			if zembed.IsEmbedded() then
+				local seen = {}
+				for _, filePath in pairs(zembed.GetAssetFilesUnder(path)) do
+					local materialName = filePath:gsub([[\]], "/"):match("^src/assets/materials/compressed/([^/]+)/albedo%.png$")
+					if materialName and not seen[materialName] then
+						seen[materialName] = true
+						table.insert(entries, {
+							kind = "directory",
+							name = materialName,
+						})
+					end
+				end
+			else
+				entries = zune.fs.entries(path)
+			end
+
 			for _, dir in pairs(entries) do
 				if dir.kind ~= "directory" then
 					continue
 				end
 
-				local albedo_tex = path .. `/{dir.name}/albedo.png` -- assume pngs
+				local albedo_tex = zembed.AssetPath(path .. `/{dir.name}/albedo.png`) -- assume pngs
 
 				local ptr = argon:CreateMeshTexture(renderer.Window, albedo_tex)
-				print("loading " .. dir.name)
-				print(ptr)
 
 				materialTextures[material_index[dir.name]] = ptr
 			end
@@ -71,10 +87,12 @@ Workspace.InitRenderer = function(renderer, signal, game)
 				local matrix = object.CFrame:ToEngineMatrix(object.Size)
 				local mesh = meshes.cube
 				local material = materialTextures[object.Material]
+				local materialTileScale = math.max(1, math.max(object.Size.X, object.Size.Y, object.Size.Z) / 4)
 
 				renderer.MeshPool.DrawMesh({
 					texture = material,
 					MaterialKind = getMaterialKind(object.Material),
+					MaterialTileScale = materialTileScale,
 					mesh = mesh,
 					matrix = matrix,
 					color = object.Color,
@@ -88,6 +106,7 @@ Workspace.InitRenderer = function(renderer, signal, game)
 				matrix = nil
 				mesh = nil
 				material = nil
+				materialTileScale = nil
 			end
 		end
 	end)

@@ -75,11 +75,18 @@ function DataModel.new(RENDERER, ...)
 			path = `./src/environment/game/services/{name}/{name}.luau`
 		end
 
-		local read = zune.fs.readFile(path)
-		local stack, success, returnedData = kilang:execute(read, {
-			SecurityCapabilities = Enum.SecurityCapabilities.Internals,
-			StackId = path,
-		})
+		local stack
+		local success
+		local returnedData
+		if zembed.IsEmbedded() then
+			success, returnedData = pcall(require, path)
+		else
+			local read = zembed.readFile(path)
+			stack, success, returnedData = kilang:execute(read, {
+				SecurityCapabilities = Enum.SecurityCapabilities.Internals,
+				StackId = path,
+			})
+		end
 		local initTime = (os.clock() - addServiceStart) * 1000
 
 		if success then

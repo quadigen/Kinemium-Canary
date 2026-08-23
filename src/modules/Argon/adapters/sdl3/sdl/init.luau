@@ -4,7 +4,6 @@
 
 local dll = "./vendor/"
 local ffi = zune.ffi
-local platform = zune.platform
 
 local structs = require("./sdl/structs")
 local funcs = require("./sdl/funcs")
@@ -13,14 +12,7 @@ if zembed.IsEmbedded() then
 	dll = "./"
 end
 
-local libname
-if platform.os == "windows" then
-	libname = "SDL3.dll"
-elseif platform.os == "linux" then
-	libname = "SDL3.so"
-elseif platform.os == "macos" then
-	libname = "SDL3.dylib"
-end
+local libname = "KinemiumLibs." .. ffi.suffix
 
 local sdl3: typeof(funcs) = ffi.dlopen(dll .. libname, funcs)
 

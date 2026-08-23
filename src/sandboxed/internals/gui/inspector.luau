@@ -259,7 +259,7 @@ local adapters = {
 
 				Options = result,
 				Placeholder = val.Name,
-				MaxVisibleOptions = 4,
+				MaxVisibleOptions = 10,
 
 				OnChanged = function(index, chosenValue)
 					firstObj[prop.name] = val.EnumType[chosenValue]

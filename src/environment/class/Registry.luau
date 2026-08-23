@@ -20,27 +20,40 @@ local createClassesStart = os.clock()
 for _, entry in pairs(entries) do
 	local createClassStart = os.clock()
 	local requirePath
-	local source
+	local returned
 	if zembed.IsEmbedded() then
-		local name = zune.fs.path.basename(entry)
-		local full = "./list/" .. name
-		requirePath = string.gsub(entry, ".luau", "")
+		local moduleName = zune.fs.path.basename(entry):gsub("%.luau$", ""):gsub("%.lua$", "")
+		requirePath = "./list/" .. moduleName
 	else
 		requirePath = "./src/environment/class/list/" .. entry.name
 	end
-	source = zune.fs.readFile(requirePath)
 
-	local r, s, returned = kilang:execute(source, {
-		SecurityCapabilities = Enum.SecurityCapabilities.Internals,
-		StackId = requirePath,
-	})
+	local initTime
+	if zembed.IsEmbedded() then
+		local success, result = pcall(require, requirePath)
+		initTime = (os.clock() - createClassStart) * 1000
 
-	if not s then
-		print(r, s)
-		continue
+		if not success then
+			print(requirePath, false, result)
+			continue
+		end
+
+		returned = result
+	else
+		local source = zembed.readFile(requirePath)
+		local r, s, result = kilang:execute(source, {
+			SecurityCapabilities = Enum.SecurityCapabilities.Internals,
+			StackId = requirePath,
+		})
+		initTime = (os.clock() - createClassStart) * 1000
+
+		if not s then
+			print(r, s)
+			continue
+		end
+
+		returned = result
 	end
-
-	local initTime = (os.clock() - createClassStart) * 1000
 
 	-- returned = { class = "Part", callback = function(Part) ... end }
 

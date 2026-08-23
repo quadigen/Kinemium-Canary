@@ -13,9 +13,7 @@ local structs = require("./manifold/structs")
 local funcs = require("./manifold/funcs")
 local constants = require("./manifold/constants")
 
-ffi.dlopen(zune.fs.path.join(dll, "manifold." .. ffi.suffix), {})
-
-local libname = "manifoldc." .. ffi.suffix
+local libname = "KinemiumLibs." .. ffi.suffix
 
 local manifoldPath = zembed.IsEmbedded() and zune.fs.path.join(dll, libname) or (dll .. libname)
 local manifold: funcs.Fns = ffi.dlopen(manifoldPath, funcs)

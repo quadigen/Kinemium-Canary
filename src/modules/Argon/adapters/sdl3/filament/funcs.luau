@@ -161,7 +161,7 @@ export type Fns = {
 		ctx: FFIPointer,
 		width: float,
 		height: float,
-		glTexture: FFIPointer,
+		texture: FFIPointer,
 		offsetStudsU: float,
 		offsetStudsV: float,
 		studsPerTileU: float,
@@ -222,6 +222,24 @@ local funcs = {
 	Kine_Filament_CreateTexFromPixels = {
 		returns = ffi.types.pointer,
 		args = { ffi.types.pointer, ffi.types.i32, ffi.types.i32, ffi.types.i32, ffi.types.pointer },
+	},
+	Kine_Filament_CreatePbrTexFromPixels = {
+		returns = ffi.types.pointer,
+		args = {
+			ffi.types.pointer,
+			ffi.types.i32,
+			ffi.types.i32,
+			ffi.types.i32,
+			ffi.types.pointer,
+			ffi.types.i32,
+			ffi.types.i32,
+			ffi.types.i32,
+			ffi.types.pointer,
+			ffi.types.i32,
+			ffi.types.i32,
+			ffi.types.i32,
+			ffi.types.pointer,
+		},
 	},
 	Kine_Filament_GetHeight = {
 		returns = ffi.types.i32,
@@ -422,7 +440,7 @@ local funcs = {
 			ffi.types.pointer, -- ctx
 			ffi.types.float, -- width
 			ffi.types.float, -- height
-			ffi.types.pointer, -- glTexture
+			ffi.types.pointer, -- KineFilamentTex
 			ffi.types.float, -- offsetStudsU
 			ffi.types.float, -- offsetStudsV
 			ffi.types.float, -- studsPerTileU

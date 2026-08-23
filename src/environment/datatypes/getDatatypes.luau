@@ -24,8 +24,17 @@ function datatypes:Init(datamodel, renderer, types)
 			end
 
 			moduleName = "datatypes/" .. moduleName
-			types[stem] = require("../" .. moduleName)
-			types[stem].__type = moduleName
+			local success, result = pcall(require, "../" .. moduleName)
+			if not success then
+				warn("Failed to add datatype " .. tostring(file) .. ": " .. tostring(result))
+				continue
+			end
+
+			types[stem] = result
+			if type(types[stem]) == "table" then
+				types[stem].__type = moduleName
+				types[stem].__datatype = true
+			end
 		else
 			if file.name == "getDatatypes.luau" then
 				continue

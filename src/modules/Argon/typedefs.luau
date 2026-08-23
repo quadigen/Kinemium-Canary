@@ -10,6 +10,10 @@ export type Image = {
 	pitch: number,
 }
 
+export type Decal = {
+	_handle: any,
+}
+
 export type Texture = {
 	_handle: any,
 }

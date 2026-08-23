@@ -8,8 +8,6 @@ local root = zjoin("src")
 local entry = zjoin(root, "main.luau")
 
 local bin = zjoin("build")
-local sandboxEmbedRoot = zjoin(bin, ".embedded", root, "sandboxed")
-local sandboxEmbedGlob = zjoin(sandboxEmbedRoot, "**")
 
 local function normalizePath(path: string): string
 	return (path:gsub([[\]], "/"))
@@ -37,7 +35,7 @@ local assets = {
 	zjoin("**", ".luaurc"),
 	zjoin(root, "assets", "**"),
 	zjoin(root, "projects.toml"),
-	sandboxEmbedGlob,
+	zjoin(root, "sandboxed", "**"),
 }
 
 local function flagExists(flag: string)
@@ -51,23 +49,6 @@ local function flagExists(flag: string)
 end
 
 local ext = ""
-
-local function copySandboxedSources(source: string, target: string)
-	if zune.fs.stat(target).kind ~= "directory" then
-		zune.fs.makeDir(target, true)
-	end
-
-	for _, entry in pairs(zune.fs.entries(source)) do
-		local sourcePath = zjoin(source, entry.name)
-		local targetPath = zjoin(target, entry.name)
-
-		if entry.kind == "directory" then
-			copySandboxedSources(sourcePath, targetPath)
-		elseif entry.kind == "file" then
-			zune.fs.writeFile(targetPath .. ".kinesrc", zune.fs.readFile(sourcePath))
-		end
-	end
-end
 
 local function copyLibraries(ext, bin, path)
 	for _, f in pairs(zune.fs.entries(path)) do
@@ -135,7 +116,6 @@ local function buildExecutable(name, exec_ext, lib_ext)
 	copyLibraries(lib_ext, dir, "./vendor")
 
 	print("Copying assets")
-	copySandboxedSources(zjoin(root, "sandboxed"), sandboxEmbedRoot)
 	zune.fs.copy(zjoin(root, "assets"), zjoin(dir, "assets"), true)
 
 	table.insert(l_args, "--out=" .. l_exec)

@@ -1,13 +1,12 @@
 material {
     name : "KineDefault",
-    shadingModel : lit,
+    shadingModel : unlit,
     blending : transparent,
     depthWrite : false,
+    doubleSided : true,
     requires : [ uv0 ],
     parameters : [
         { type : float4,   name : baseColor },
-        { type : float,    name : roughness },
-        { type : float,    name : metallic },
         { type : float,    name : hasTexture },
         { type : sampler2d, name : baseColorMap },
         { type : float2,   name : uvScale },
@@ -23,7 +22,5 @@ fragment {
             color *= texture(materialParams_baseColorMap, uv);
         }
         material.baseColor = color;
-        material.roughness = materialParams.roughness;
-        material.metallic  = materialParams.metallic;
     }
 }

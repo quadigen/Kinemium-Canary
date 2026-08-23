@@ -285,7 +285,7 @@ local Instance = require("@Instance")
 local Enum = require("@EnumMap")
 local kilang = require("@kilang")
 local task = zune.task
-local cam = require("@camera")
+local cam = require("./environment/class/list/Camera")
 
 -- LOAD APPROPRIATE RENDERER
 local renderer
@@ -428,6 +428,7 @@ local function loadInternals()
 					SecurityCapabilities = Enum.SecurityCapabilities.Internals,
 					StackId = path,
 				}, {
+					renderer = renderer,
 					require = function(path)
 						local success, result = pcall(function()
 							return require(path)

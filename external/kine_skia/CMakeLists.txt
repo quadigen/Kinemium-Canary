@@ -137,7 +137,13 @@ if(NOT KINE_SKIA_DIR AND NOT KINE_SKIA_PREBUILT_LIBRARY_PROVIDED)
         SOURCE_DIR "${KINE_SKIA_SOURCE_DIR}"
         BUILD_IN_SOURCE TRUE
         CONFIGURE_COMMAND
-            "${Python3_EXECUTABLE}" "tools/git-sync-deps"
+            git config core.longpaths true
+            COMMAND "${CMAKE_COMMAND}" -E env
+                "GIT_SYNC_DEPS_SKIP_EMSDK=1"
+                "GIT_CONFIG_COUNT=1"
+                "GIT_CONFIG_KEY_0=core.longpaths"
+                "GIT_CONFIG_VALUE_0=true"
+                "${Python3_EXECUTABLE}" "tools/git-sync-deps"
             ${KINE_SKIA_FETCH_NINJA_COMMAND}
             COMMAND "<SOURCE_DIR>/bin/gn${CMAKE_EXECUTABLE_SUFFIX}" "gen" "out/${KINE_SKIA_BUILD_NAME}" "--args=${KINE_SKIA_GN_ARGS_STRING}"
         BUILD_COMMAND

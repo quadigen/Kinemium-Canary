@@ -4,6 +4,7 @@ local typedefs = require("../../typedefs")
 local ui = require("./skialib")
 local filament = require("./filamentlib")
 local sdl_image = require("./sdl_image")
+local zembed = require("@zembed")
 local SDLAdapter = {}
 
 local translation_layers = {}
@@ -248,7 +249,38 @@ function SDLAdapter:GetDetailsImage(image: typedefs.Image)
 	return
 end
 
+local function loadRgbaImage(imagePath: string)
+	local ok, surface = pcall(sdl_image.lib.IMG_Load, imagePath)
+	if not ok or not surface or surface == zune.ffi.null then
+		return nil, nil
+	end
+
+	local rgbaSurface = sdl.lib.SDL_ConvertSurface(
+		surface :: SDL_Surface,
+		0x16762004 -- SDL_PIXELFORMAT_RGBA32
+	)
+
+	sdl.lib.SDL_DestroySurface(surface :: SDL_Surface)
+	if not rgbaSurface or rgbaSurface == zune.ffi.null then
+		return nil, nil
+	end
+
+	local image = {
+		_handle = rgbaSurface,
+	}
+	local details = SDLAdapter:GetDetailsImage(image)
+	if details then
+		image.width = details.width
+		image.height = details.height
+		image.pixels = details.pixels
+		image.pitch = details.pitch
+	end
+
+	return image, rgbaSurface
+end
+
 function SDLAdapter:CreateImageFromPath(path: string)
+	path = zembed.AssetPath(path)
 	local surface = sdl_image.lib.IMG_Load(path) :: SDL_Surface
 	local skia_image = ui:CreateImage(path)
 
@@ -271,28 +303,44 @@ function SDLAdapter:CreateMesh(window: typedefs.Window, meshType: string)
 	return filament:CreateMesh(window, meshType)
 end
 
-function SDLAdapter:CreateMeshTexture(window: typedefs.Window, path: string)
-	local surface = sdl_image.lib.IMG_Load(path) :: SDL_Surface
-
-	local rgbaSurface = sdl.lib.SDL_ConvertSurface(
-		surface,
-		0x16762004 -- SDL_PIXELFORMAT_RGBA32
-	)
-
-	sdl.lib.SDL_DestroySurface(surface)
-
-	local new = {
-		_handle = rgbaSurface,
-	}
-	local details = SDLAdapter:GetDetailsImage(new)
-	if details then
-		new.width = details.width
-		new.height = details.height
-		new.pixels = details.pixels
-		new.pitch = details.pitch
+function SDLAdapter:CreateDecalTexture(window: typedefs.Window, path: string)
+	path = zembed.AssetPath(path)
+	local image, surface = loadRgbaImage(path)
+	if not image then
+		return nil
 	end
 
-	return filament:CreateTextureFromImage(window, new)
+	local texture = filament:CreateTextureFromImage(window, image)
+	sdl.lib.SDL_DestroySurface(surface)
+	return texture
+end
+
+function SDLAdapter:CreateMeshTexture(window: typedefs.Window, path: string)
+	local albedo, albedoSurface = loadRgbaImage(path)
+	if not albedo then
+		return nil
+	end
+
+	local basePath = path:gsub("/albedo%.png$", "")
+	local normal, normalSurface = loadRgbaImage(basePath .. "/normal.png")
+	local orm, ormSurface = loadRgbaImage(basePath .. "/orm.png")
+
+	local texture = nil
+	if normal or orm then
+		texture = filament:CreateMaterialTextureFromImages(window, albedo, normal, orm)
+	else
+		texture = filament:CreateTextureFromImage(window, albedo)
+	end
+
+	sdl.lib.SDL_DestroySurface(albedoSurface)
+	if normalSurface then
+		sdl.lib.SDL_DestroySurface(normalSurface)
+	end
+	if ormSurface then
+		sdl.lib.SDL_DestroySurface(ormSurface)
+	end
+
+	return texture
 end
 
 function SDLAdapter:MeasureText(window: typedefs.Window, text: string, textSize: number, font: typedefs.Font)
@@ -837,5 +885,10 @@ end
 SDLAdapter.DrawMesh = filament.DrawMesh
 SDLAdapter.SetSkyAtmosphere = filament.SetSkyAtmosphere
 SDLAdapter.SetCameraLookAt = filament.SetCameraLookAt
+SDLAdapter.CreateDecal = filament.CreateDecal
+SDLAdapter.RemoveDecal = filament.RemoveDecal
+SDLAdapter.SetDecalTransform = filament.SetDecalTransform
+SDLAdapter.SetDecalTiling = filament.SetDecalTiling
+SDLAdapter.Destroy3DTexture = filament.Destroy3DTexture
 
 return SDLAdapter

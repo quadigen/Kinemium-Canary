@@ -18,14 +18,18 @@ FetchContent_Declare(
     GIT_SHALLOW TRUE
 )
 
-set(SDL_SHARED ON CACHE BOOL "" FORCE)
-set(SDL_STATIC OFF CACHE BOOL "" FORCE)
+set(SDL_SHARED ${KINE_BUILD_SHARED} CACHE BOOL "" FORCE)
+set(SDL_STATIC ON CACHE BOOL "" FORCE)
 set(SDL_TESTS OFF CACHE BOOL "" FORCE)
 set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
 
 FetchContent_MakeAvailable(SDL3)
 
-if(TARGET SDL3::SDL3)
+if(NOT KINE_BUILD_SHARED AND TARGET SDL3::SDL3-static)
+    set(KINE_SDL3_TARGET SDL3::SDL3-static)
+elseif(NOT KINE_BUILD_SHARED AND TARGET SDL3-static)
+    set(KINE_SDL3_TARGET SDL3-static)
+elseif(TARGET SDL3::SDL3)
     set(KINE_SDL3_TARGET SDL3::SDL3)
 elseif(TARGET SDL3::SDL3-shared)
     set(KINE_SDL3_TARGET SDL3::SDL3-shared)
@@ -35,7 +39,7 @@ else()
     message(FATAL_ERROR "SDL3 target was not created by FetchContent")
 endif()
 
-if(TARGET SDL3-shared AND TARGET SDL3_Headers)
+if(KINE_BUILD_SHARED AND TARGET SDL3-shared AND TARGET SDL3_Headers)
     install(TARGETS SDL3-shared SDL3_Headers EXPORT sdl3-targets)
 endif()
 # --------------------------------------------------------------
@@ -180,12 +184,12 @@ if(KINE_WITH_FILAMENT)
 
     if(WIN32)
         # Windows Filament prebuilts are nested by MSVC CRT type (md/mdd/mt/mtd)
-        target_link_directories(kine_filament_shim PRIVATE 
+        target_link_directories(kine_filament_shim PUBLIC
             $<$<CONFIG:Debug>:${FILAMENT_DIR}/lib/${FILAMENT_LIB_ARCH}/mdd>
             $<$<NOT:$<CONFIG:Debug>>:${FILAMENT_DIR}/lib/${FILAMENT_LIB_ARCH}/md>
         )
     else()
-        target_link_directories(kine_filament_shim PRIVATE ${FILAMENT_DIR}/lib/${FILAMENT_LIB_ARCH})
+        target_link_directories(kine_filament_shim PUBLIC ${FILAMENT_DIR}/lib/${FILAMENT_LIB_ARCH})
     endif()
 
     # This is the link line the Filament README itself documents for

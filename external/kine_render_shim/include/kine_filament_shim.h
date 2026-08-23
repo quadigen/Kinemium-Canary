@@ -49,6 +49,17 @@ KINE_API KineFilamentTex* Kine_Filament_CreateTexFromPixels(
     int width, int height,
     int rowBytes,
     const void* pixelsRGBA8);
+KINE_API KineFilamentTex* Kine_Filament_CreatePbrTexFromPixels(
+    KineFilamentContext* ctx,
+    int width, int height,
+    int albedoRowBytes,
+    const void* albedoRGBA8,
+    int normalWidth, int normalHeight,
+    int normalRowBytes,
+    const void* normalRGBA8,
+    int ormWidth, int ormHeight,
+    int ormRowBytes,
+    const void* ormRGBA8);
 KINE_API void* Kine_Filament_GetEngine(KineFilamentContext* ctx);
 KINE_API void* Kine_Filament_GetScene(KineFilamentContext* ctx);
 KINE_API void* Kine_Filament_GetView(KineFilamentContext* ctx);
@@ -82,7 +93,7 @@ KINE_API void             Kine_Filament_DestroyTex(KineFilamentContext* ctx, Kin
 //   r,g,b        : base/emissive color [0..1]
 //   param1       : roughness (default/glass/water) or intensity (neon)
 //   param2       : metallic (default) or ior (glass/water) -- unused for neon
-//   param3       : unused (default/neon) or thickness (glass/water)
+//   param3       : uv tile scale (default), unused (neon), or thickness (glass/water)
 //   transmission : unused (default/neon) or transmission (glass/water)
 //   mat4         : column-major float[16] world transform
 //   tex          : optional KineFilamentTex* (from Kine_Filament_CreateTex), nil for no texture
@@ -182,7 +193,7 @@ KINE_API void Kine_Filament_SetPositionLight(
 KINE_API int  Kine_Filament_CreateDecal(
     KineFilamentContext* ctx,
     float width, float height,
-    const KineGLTextureInfo* texture,
+    KineFilamentTex* texture,
     float offsetStudsU, float offsetStudsV,
     float studsPerTileU, float studsPerTileV,
     bool culling, bool castShadows, bool receiveShadows);

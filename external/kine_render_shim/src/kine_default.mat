@@ -8,20 +8,39 @@ material {
         { type : float,    name : roughness },
         { type : float,    name : metallic },
         { type : float,    name : hasTexture },
-        { type : sampler2d, name : baseColorMap }
+        { type : sampler2d, name : baseColorMap },
+        { type : float,    name : hasNormalMap },
+        { type : sampler2d, name : normalMap },
+        { type : float,    name : hasOrmMap },
+        { type : sampler2d, name : ormMap },
+        { type : float2,   name : uvScale }
     ]
 }
 fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
 
+        vec2 uv = getUV0() * materialParams.uvScale;
         vec4 color = materialParams.baseColor;
         if (materialParams.hasTexture > 0.5) {
-            color *= texture(materialParams_baseColorMap, getUV0());
+            color *= texture(materialParams_baseColorMap, uv);
+        }
+
+        float roughness = materialParams.roughness;
+        float metallic = materialParams.metallic;
+        if (materialParams.hasOrmMap > 0.5) {
+            vec3 orm = texture(materialParams_ormMap, uv).rgb;
+            material.ambientOcclusion = orm.r;
+            roughness = orm.g;
+            metallic = orm.b;
+        }
+
+        if (materialParams.hasNormalMap > 0.5) {
+            material.normal = texture(materialParams_normalMap, uv).xyz * 2.0 - 1.0;
         }
 
         material.baseColor = color;
-        material.roughness = materialParams.roughness;
-        material.metallic  = materialParams.metallic;
+        material.roughness = roughness;
+        material.metallic  = metallic;
     }
 }

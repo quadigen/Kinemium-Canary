@@ -10,7 +10,7 @@ end
 local structs = require("./structs")
 local funcs = require("./funcs")
 
-local libname = "JoltWrapper." .. ffi.suffix
+local libname = "KinemiumLibs." .. ffi.suffix
 
 local joltPath = zembed.IsEmbedded() and zune.fs.path.join(dll, libname) or (dll .. libname)
 local jolt: typeof(funcs) = ffi.dlopen(joltPath, funcs)

@@ -181,7 +181,9 @@ struct KineMesh {
 };
 
 struct KineTexHandle {
-    Texture* tex = nullptr;
+    Texture* tex       = nullptr;
+    Texture* normalTex = nullptr;
+    Texture* ormTex    = nullptr;
 };
 
 // ---------------------------------------------------------------------------
@@ -558,6 +560,20 @@ static KineMesh* buildPyramid()
     return m;
 }
 
+static KineMesh* buildDecalQuad()
+{
+    auto* m = new KineMesh();
+    m->vertices = {
+        {-0.5f, 0.0f, -0.5f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f},
+        { 0.5f, 0.0f, -0.5f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f},
+        { 0.5f, 0.0f,  0.5f, 0.0f, 1.0f, 0.0f, 1.0f, 1.0f},
+        {-0.5f, 0.0f,  0.5f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f},
+    };
+    m->indices = {0, 1, 2, 0, 2, 3};
+    m->indexCount = (uint32_t)m->indices.size();
+    return m;
+}
+
 static void uploadMesh(KineMesh* m, Engine* engine)
 {
     size_t vsize = m->vertices.size() * sizeof(KineVertex);
@@ -677,12 +693,37 @@ static void kine_apply_material_params(MaterialInstance* mi, const KineBatchKey&
         mi->setParameter("baseColor", RgbaType::LINEAR, math::float4{key.r, key.g, key.b, 1.0f});
         mi->setParameter("roughness", key.param1);
         mi->setParameter("metallic",  key.param2);
+        float uvScale = key.param3 > 0.0f ? key.param3 : 1.0f;
+        mi->setParameter("uvScale", math::float2{uvScale, uvScale});
+
+        TextureSampler repeatSampler(
+            TextureSampler::MinFilter::LINEAR,
+            TextureSampler::MagFilter::LINEAR,
+            TextureSampler::WrapMode::REPEAT
+        );
+
         if (key.texture && key.texture->tex) {
             mi->setParameter("hasTexture", 1.0f);
-            mi->setParameter("baseColorMap", key.texture->tex, TextureSampler{});
+            mi->setParameter("baseColorMap", key.texture->tex, repeatSampler);
         } else {
             mi->setParameter("hasTexture", 0.0f);
-            mi->setParameter("baseColorMap", whiteTex, TextureSampler{});
+            mi->setParameter("baseColorMap", whiteTex, repeatSampler);
+        }
+
+        if (key.texture && key.texture->normalTex) {
+            mi->setParameter("hasNormalMap", 1.0f);
+            mi->setParameter("normalMap", key.texture->normalTex, repeatSampler);
+        } else {
+            mi->setParameter("hasNormalMap", 0.0f);
+            mi->setParameter("normalMap", whiteTex, repeatSampler);
+        }
+
+        if (key.texture && key.texture->ormTex) {
+            mi->setParameter("hasOrmMap", 1.0f);
+            mi->setParameter("ormMap", key.texture->ormTex, repeatSampler);
+        } else {
+            mi->setParameter("hasOrmMap", 0.0f);
+            mi->setParameter("ormMap", whiteTex, repeatSampler);
         }
     }
 }
@@ -840,6 +881,45 @@ static Material* buildDecalMaterial(Engine* engine) {
     return Material::Builder()
         .package(KINE_DECAL_PACKAGE_KINE_DECAL_DATA, KINE_DECAL_PACKAGE_KINE_DECAL_SIZE)
         .build(*engine);
+}
+
+static Texture* kine_create_uploaded_rgba_texture(
+    Engine* engine,
+    int width, int height,
+    int rowBytes,
+    const void* pixelsRGBA8)
+{
+    if (!engine || !pixelsRGBA8 || width <= 0 || height <= 0 || rowBytes <= 0)
+        return nullptr;
+
+    size_t bytes = (size_t)rowBytes * height;
+    uint8_t* copy = (uint8_t*)malloc(bytes);
+    if (!copy) return nullptr;
+    memcpy(copy, pixelsRGBA8, bytes);
+
+    Texture* tex = Texture::Builder()
+        .width((uint32_t)width)
+        .height((uint32_t)height)
+        .levels(1)
+        .usage(Texture::Usage::UPLOADABLE | Texture::Usage::SAMPLEABLE)
+        .format(Texture::InternalFormat::RGBA8)
+        .build(*engine);
+
+    if (!tex) {
+        free(copy);
+        return nullptr;
+    }
+
+    uint32_t strideTexels = (uint32_t)(rowBytes / 4);
+    Texture::PixelBufferDescriptor pb(
+        copy, bytes,
+        Texture::Format::RGBA, Texture::Type::UBYTE,
+        /*alignment*/ 1, /*left*/ 0, /*top*/ 0, /*stride*/ strideTexels,
+        [](void* buffer, size_t, void*) { free(buffer); });
+
+    tex->setImage(*engine, 0, 0, 0,
+                  (uint32_t)width, (uint32_t)height, std::move(pb));
+    return tex;
 }
 
 extern "C" {
@@ -1421,7 +1501,7 @@ KINE_API int Kine_Filament_CreateDecal(
     KineFilamentContext* ctx,
     float width,
     float height,
-    const KineGLTextureInfo* glTexture,
+    KineFilamentTex* texture,
     float offsetStudsU,
     float offsetStudsV,
     float studsPerTileU,
@@ -1431,33 +1511,16 @@ KINE_API int Kine_Filament_CreateDecal(
     bool receiveShadows
 )
 {
-    if (!ctx || !ctx->engine || !ctx->scene || !glTexture ||
+    auto* texHandle = (KineTexHandle*)texture;
+    if (!ctx || !ctx->engine || !ctx->scene || !texHandle || !texHandle->tex ||
         width <= 0.0f || height <= 0.0f)
-        return -1;
-
-    if (glTexture->id == 0)
         return -1;
 
     Entity entity = EntityManager::get().create();
 
-    Texture* filamentTexture = Texture::Builder()
-        .width((uint32_t)glTexture->width)
-        .height((uint32_t)glTexture->height)
-        .levels(1)
-        .usage(Texture::Usage::SAMPLEABLE)
-        .format(Texture::InternalFormat::RGBA8)
-        .import(glTexture->id)
-        .build(*ctx->engine);
-
-    if (!filamentTexture) {
-        EntityManager::get().destroy(entity);
-        return -1;
-    }
-
     MaterialInstance* material = ctx->decalMaterial->createInstance();
 
     if (!material) {
-        ctx->engine->destroy(filamentTexture);
         EntityManager::get().destroy(entity);
         return -1;
     }
@@ -1479,11 +1542,11 @@ KINE_API int Kine_Filament_CreateDecal(
 
     material->setParameter("baseColor", RgbaType::LINEAR, math::float4{1.0f, 1.0f, 1.0f, 1.0f});
     material->setParameter("hasTexture", 1.0f);
-    material->setParameter("baseColorMap", filamentTexture, sampler);
+    material->setParameter("baseColorMap", texHandle->tex, sampler);
     material->setParameter("uvScale", uvScale);
     material->setParameter("uvOffset", uvOffset);
 
-    KineMesh* mesh = buildCube();
+    KineMesh* mesh = buildDecalQuad();
     uploadMesh(mesh, ctx->engine);
 
     RenderableManager::Builder(1)
@@ -1732,39 +1795,41 @@ KINE_API KineFilamentTex* Kine_Filament_CreateTexFromPixels(
     int rowBytes,
     const void* pixelsRGBA8)
 {
-    if (!ctx || !ctx->engine || !pixelsRGBA8 || width <= 0 || height <= 0 || rowBytes <= 0)
-        return nullptr;
-
-    size_t bytes = (size_t)rowBytes * height;
-    uint8_t* copy = (uint8_t*)malloc(bytes);
-    if (!copy) return nullptr;
-    memcpy(copy, pixelsRGBA8, bytes);
-
     auto* th = new KineTexHandle();
-    th->tex = Texture::Builder()
-        .width((uint32_t)width)
-        .height((uint32_t)height)
-        .levels(1)
-        .usage(Texture::Usage::UPLOADABLE | Texture::Usage::SAMPLEABLE)
-        .format(Texture::InternalFormat::RGBA8)
-        .build(*ctx->engine);
-
+    th->tex = ctx ? kine_create_uploaded_rgba_texture(ctx->engine, width, height, rowBytes, pixelsRGBA8) : nullptr;
     if (!th->tex) {
-        free(copy);
         delete th;
         return nullptr;
     }
 
-    uint32_t strideTexels = (uint32_t)(rowBytes / 4); // stride is in texels, not bytes
+    return (KineFilamentTex*)th;
+}
 
-    Texture::PixelBufferDescriptor pb(
-        copy, bytes,
-        Texture::Format::RGBA, Texture::Type::UBYTE,
-        /*alignment*/ 1, /*left*/ 0, /*top*/ 0, /*stride*/ strideTexels,
-        [](void* buffer, size_t, void*) { free(buffer); });
+KINE_API KineFilamentTex* Kine_Filament_CreatePbrTexFromPixels(
+    KineFilamentContext* ctx,
+    int width, int height,
+    int albedoRowBytes,
+    const void* albedoRGBA8,
+    int normalWidth, int normalHeight,
+    int normalRowBytes,
+    const void* normalRGBA8,
+    int ormWidth, int ormHeight,
+    int ormRowBytes,
+    const void* ormRGBA8)
+{
+    if (!ctx || !ctx->engine) return nullptr;
 
-    th->tex->setImage(*ctx->engine, 0, 0, 0,
-                    (uint32_t)width, (uint32_t)height, std::move(pb));
+    auto* th = new KineTexHandle();
+    th->tex = kine_create_uploaded_rgba_texture(ctx->engine, width, height, albedoRowBytes, albedoRGBA8);
+    if (!th->tex) {
+        delete th;
+        return nullptr;
+    }
+
+    th->normalTex = kine_create_uploaded_rgba_texture(
+        ctx->engine, normalWidth, normalHeight, normalRowBytes, normalRGBA8);
+    th->ormTex = kine_create_uploaded_rgba_texture(
+        ctx->engine, ormWidth, ormHeight, ormRowBytes, ormRGBA8);
 
     return (KineFilamentTex*)th;
 }
@@ -1813,6 +1878,8 @@ KINE_API void Kine_Filament_DestroyTex(KineFilamentContext* ctx, KineFilamentTex
     if (!ctx || !tex) return;
     auto* th = (KineTexHandle*)tex;
     if (th->tex) ctx->engine->destroy(th->tex);
+    if (th->normalTex) ctx->engine->destroy(th->normalTex);
+    if (th->ormTex) ctx->engine->destroy(th->ormTex);
     delete th;
 }
 
