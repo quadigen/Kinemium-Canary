@@ -170,6 +170,11 @@ function SDLAdapter:InitWindow(params: typedefs.WindowParams): typedefs.Window
 	local flags = bit32.bor(graphics[params.WGI], SDL_WINDOW_RESIZABLE)
 
 	local sdl_window = sdl.lib.SDL_CreateWindow(params.Title, params.Width, params.Height, flags)
+	if sdl_window == zune.ffi.null then
+		print("SDL Window creation returned null pointer.")
+		print("Please get your shit together.")
+		return
+	end
 	if sdl_window then
 		local object = {
 			Width = params.Width,
