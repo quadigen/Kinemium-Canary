@@ -8,13 +8,32 @@ local funcs = require("./filament/funcs")
 local structs = require("./filament/structs")
 local const = require("./filament/constants")
 
-local libLocation = "./vendor/KinemiumLibs." .. ffi.suffix
 local zembed = require("@zembed")
-if zembed.IsEmbedded() then
-	libLocation = zembed.RuntimePath("KinemiumLibs." .. ffi.suffix)
+
+local libname = "KinemiumLibs." .. ffi.suffix
+
+local function getLibraryPath(): string
+	if zembed.IsEmbedded() then
+		return zembed.RuntimePath(libname)
+	end
+
+	local paths = {
+		"./vendor/" .. libname,
+		"../vendor/" .. libname,
+		"./" .. libname,
+	}
+
+	for _, path in paths do
+		local ok, stat = pcall(zune.fs.stat, path)
+		if ok and stat.kind == "file" then
+			return path
+		end
+	end
+
+	return paths[1]
 end
 
-local lib = ffi.dlopen(libLocation, funcs)
+local lib = ffi.dlopen(getLibraryPath(), funcs)
 
 return {
 	structs = structs,

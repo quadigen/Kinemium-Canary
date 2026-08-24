@@ -50,7 +50,7 @@ jobs:
         run: |
           if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
             sudo apt-get update
-            sudo apt-get install -y cmake ninja-build build-essential
+            sudo apt-get install -y cmake ninja-build build-essential libc++1 libc++abi1 libc++-dev libc++abi-dev
           elif [[ "${{ matrix.os }}" == "macos-latest" ]]; then
             brew install cmake ninja
           elif [[ "${{ matrix.os }}" == "windows-latest" ]]; then
@@ -94,11 +94,128 @@ jobs:
         run: |
           cmake --build external/build --config Release --parallel
 
+      - name: Stage native runtime library
+        shell: bash
+        run: |
+          mkdir -p vendor
+
+          case "${{ matrix.os }}" in
+            ubuntu-latest)
+              src="external/build/bin/KinemiumLibs.so"
+              fallback="external/build/bin/libKinemiumLibs.so"
+              dest="vendor/KinemiumLibs.so"
+              ;;
+            macos-latest)
+              src="external/build/bin/KinemiumLibs.dylib"
+              fallback="external/build/bin/libKinemiumLibs.dylib"
+              dest="vendor/KinemiumLibs.dylib"
+              ;;
+            windows-latest)
+              src="external/build/bin/KinemiumLibs.dll"
+              fallback="external/build/bin/libKinemiumLibs.dll"
+              dest="vendor/KinemiumLibs.dll"
+              ;;
+          esac
+
+          if [[ ! -f "$src" && -f "$fallback" ]]; then
+            src="$fallback"
+          fi
+
+          if [[ ! -f "$src" ]]; then
+            echo "Native runtime library was not produced."
+            find external/build/bin -maxdepth 1 -type f -print || true
+            exit 1
+          fi
+
+          cp "$src" "$dest"
+          ls -lh "$dest"
+
+      - name: Verify native runtime dependencies
+        shell: bash
+        run: |
+          case "${{ matrix.os }}" in
+            ubuntu-latest)
+              ldd -r vendor/KinemiumLibs.so
+              readelf -W -l vendor/KinemiumLibs.so | grep GNU_STACK
+              if readelf -W -l vendor/KinemiumLibs.so | grep GNU_STACK | grep -q 'RWE'; then
+                echo "KinemiumLibs.so was linked with an executable GNU_STACK segment."
+                exit 1
+              fi
+              if ldd -r vendor/KinemiumLibs.so 2>&1 | grep -q "undefined symbol"; then
+                echo "KinemiumLibs.so has unresolved symbols."
+                exit 1
+              fi
+              ;;
+            macos-latest)
+              otool -L vendor/KinemiumLibs.dylib
+              if otool -L vendor/KinemiumLibs.dylib | grep -E "external/build|_deps|not found"; then
+                echo "KinemiumLibs.dylib has non-portable or missing install-name dependencies."
+                exit 1
+              fi
+              ;;
+            windows-latest)
+              dumpbin //dependents vendor/KinemiumLibs.dll || true
+              ;;
+          esac
+
       - name: Run engine to gather libraries
         run: zune run engine --cli
 
+      - name: Restage native runtime library
+        shell: bash
+        run: |
+          case "${{ matrix.os }}" in
+            ubuntu-latest)
+              src="external/build/bin/KinemiumLibs.so"
+              fallback="external/build/bin/libKinemiumLibs.so"
+              dest="vendor/KinemiumLibs.so"
+              ;;
+            macos-latest)
+              src="external/build/bin/KinemiumLibs.dylib"
+              fallback="external/build/bin/libKinemiumLibs.dylib"
+              dest="vendor/KinemiumLibs.dylib"
+              ;;
+            windows-latest)
+              src="external/build/bin/KinemiumLibs.dll"
+              fallback="external/build/bin/libKinemiumLibs.dll"
+              dest="vendor/KinemiumLibs.dll"
+              ;;
+          esac
+
+          if [[ ! -f "$src" && -f "$fallback" ]]; then
+            src="$fallback"
+          fi
+
+          cp "$src" "$dest"
+
       - name: Build engine
         run: zune run build --${{ matrix.flag }}
+
+      - name: Verify packaged native runtime library
+        shell: bash
+        run: |
+          case "${{ matrix.os }}" in
+            ubuntu-latest)
+              test -f "build/${{ matrix.folder }}/KinemiumLibs.so"
+              ldd -r "build/${{ matrix.folder }}/KinemiumLibs.so"
+              readelf -W -l "build/${{ matrix.folder }}/KinemiumLibs.so" | grep GNU_STACK
+              if readelf -W -l "build/${{ matrix.folder }}/KinemiumLibs.so" | grep GNU_STACK | grep -q 'RWE'; then
+                echo "Packaged KinemiumLibs.so was linked with an executable GNU_STACK segment."
+                exit 1
+              fi
+              ;;
+            macos-latest)
+              test -f "build/${{ matrix.folder }}/KinemiumLibs.dylib"
+              otool -L "build/${{ matrix.folder }}/KinemiumLibs.dylib"
+              if otool -L "build/${{ matrix.folder }}/KinemiumLibs.dylib" | grep -E "external/build|_deps|not found"; then
+                echo "Packaged KinemiumLibs.dylib has non-portable or missing install-name dependencies."
+                exit 1
+              fi
+              ;;
+            windows-latest)
+              test -f "build/${{ matrix.folder }}/KinemiumLibs.dll"
+              ;;
+          esac
 
       - name: Remove .embedded folder
         shell: bash

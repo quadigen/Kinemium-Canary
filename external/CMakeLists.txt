@@ -122,6 +122,7 @@ endif()
 
 set_target_properties(KinemiumLibs PROPERTIES
     OUTPUT_NAME "KinemiumLibs"
+    PREFIX ""
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
     ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
@@ -175,5 +176,17 @@ elseif(APPLE)
         "-framework UniformTypeIdentifiers"
     )
 else()
+    find_library(KINE_LIBCXX NAMES c++ libc++.so.1)
+    find_library(KINE_LIBCXXABI NAMES c++abi libc++abi.so.1)
+
+    target_link_options(KinemiumLibs PRIVATE -Wl,-z,noexecstack)
     target_link_libraries(KinemiumLibs PRIVATE GL X11 dl pthread m)
+
+    if(KINE_LIBCXX)
+        target_link_libraries(KinemiumLibs PRIVATE "${KINE_LIBCXX}")
+    endif()
+
+    if(KINE_LIBCXXABI)
+        target_link_libraries(KinemiumLibs PRIVATE "${KINE_LIBCXXABI}")
+    endif()
 endif()

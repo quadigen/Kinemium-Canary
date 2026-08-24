@@ -2,18 +2,35 @@
 --!optimize 2
 -- Made by FFIGen (Kinemium)
 
-local dll = "./vendor/"
 local ffi = zune.ffi
 
 local funcs = require("./skia/funcs")
 local zembed = require("@zembed")
-if zembed.IsEmbedded() then
-	dll = "./"
-end
 
 local libname = "KinemiumLibs." .. ffi.suffix
 
-local skia: typeof(funcs) = ffi.dlopen(dll .. libname, funcs)
+local function getLibraryPath(): string
+	if zembed.IsEmbedded() then
+		return zembed.RuntimePath(libname)
+	end
+
+	local paths = {
+		"./vendor/" .. libname,
+		"../vendor/" .. libname,
+		"./" .. libname,
+	}
+
+	for _, path in paths do
+		local ok, stat = pcall(zune.fs.stat, path)
+		if ok and stat.kind == "file" then
+			return path
+		end
+	end
+
+	return paths[1]
+end
+
+local skia: typeof(funcs) = ffi.dlopen(getLibraryPath(), funcs)
 
 return {
 	lib = skia,
