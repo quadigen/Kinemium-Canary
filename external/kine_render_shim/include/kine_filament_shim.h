@@ -16,6 +16,28 @@ typedef struct KineFilamentContext KineFilamentContext;
 typedef struct KineFilamentMesh    KineFilamentMesh;
 typedef struct KineFilamentTex     KineFilamentTex;
 
+#define KINE_FILAMENT_DRAW_CAST_SHADOWS    (1u << 0)
+#define KINE_FILAMENT_DRAW_RECEIVE_SHADOWS (1u << 1)
+#define KINE_FILAMENT_DRAW_CULLING         (1u << 2)
+
+/* Packed frame-submission item used by Kine_Filament_DrawMeshList.
+   Keep this layout in sync with filament/structs.luau. */
+typedef struct KineFilamentDrawItem {
+    KineFilamentMesh* mesh;
+    KineFilamentTex* tex;
+    float transform[16];
+    float r;
+    float g;
+    float b;
+    float param1;
+    float param2;
+    float param3;
+    float transmission;
+    int32_t materialKind;
+    uint32_t flags;
+    uint32_t reserved;
+} KineFilamentDrawItem;
+
 typedef struct KineGLTextureInfo {
     unsigned int id;
     int width;
@@ -23,6 +45,17 @@ typedef struct KineGLTextureInfo {
     int mipmaps;
     int format;
 } KineGLTextureInfo;
+
+typedef struct KineFilamentVulkanBackend {
+    void* instance;              /* VkInstance */
+    void* physicalDevice;        /* VkPhysicalDevice */
+    void* device;                /* VkDevice */
+    void* queue;                 /* VkQueue */
+    uint32_t graphicsQueueFamilyIndex;
+    uint32_t maxApiVersion;      /* 0 = let Skia infer/default */
+    void* getInstanceProcAddr;   /* PFN_vkGetInstanceProcAddr */
+    void* getDeviceProcAddr;     /* PFN_vkGetDeviceProcAddr */
+} KineFilamentVulkanBackend;
 
 // ---------------------------------------------------------------------------
 // Material kinds for Kine_Filament_DrawMeshEx's materialKind parameter.
@@ -32,15 +65,42 @@ typedef struct KineGLTextureInfo {
 #define KINE_MAT_GLASS   1
 #define KINE_MAT_NEON    2
 #define KINE_MAT_WATER   3
+#define KINE_MAT_OUTLINE 4
+
+// Which arm/handle of a gizmo is being interacted with.
+#define KINE_GIZMO_AXIS_NONE   0
+#define KINE_GIZMO_AXIS_X      1
+#define KINE_GIZMO_AXIS_Y      2
+#define KINE_GIZMO_AXIS_Z      3
+#define KINE_GIZMO_AXIS_CENTER 4
+
+// Gizmo type, matches the existing shape codes used by Kine_Filament_CreateMesh.
+#define KINE_GIZMO_MOVE   10
+#define KINE_GIZMO_ROTATE 11
+#define KINE_GIZMO_SCALE  12
+
+typedef struct KineFilamentGizmo KineFilamentGizmo;
 
 KINE_API KineFilamentContext* Kine_Filament_Create(int width, int height);
+KINE_API KineFilamentContext* Kine_Filament_CreateForSDLWindow(void* sdlWindow, int width, int height);
+KINE_API KineFilamentContext* Kine_Filament_CreateForVulkanCompositor(
+    void* vulkanCompositor,
+    int width,
+    int height);
+KINE_API KineFilamentContext* Kine_Filament_CreateForVulkanCompositorWindow(
+    void* sdlWindow,
+    int width,
+    int height);
+KINE_API void* Kine_Filament_GetVulkanCompositor(KineFilamentContext* ctx);
 KINE_API unsigned int Kine_Filament_GetColorTextureId(KineFilamentContext* ctx);
+KINE_API bool Kine_Filament_GetVulkanBackend(KineFilamentContext* ctx, KineFilamentVulkanBackend* outBackend);
 KINE_API void Kine_Filament_Destroy(KineFilamentContext* ctx);
 
 // deltaTime (seconds) drives ctx->time, used to animate the water material.
 KINE_API void Kine_Filament_RenderFrame(KineFilamentContext* ctx, float deltaTime);
 
 KINE_API void Kine_Filament_Resize(KineFilamentContext* ctx, int width, int height);
+KINE_API void Kine_Filament_SetViewport(KineFilamentContext* ctx, int x, int y, int width, int height);
 
 KINE_API void Kine_Filament_CreateSky(KineFilamentContext* ctx, float r, float g, float b, float a);
 KINE_API void Kine_Filament_SetPostProcessing(KineFilamentContext* ctx, bool enabled);
@@ -79,9 +139,14 @@ KINE_API void Kine_Filament_SetCameraPerspective(
 KINE_API void Kine_Filament_SetCameraPosition(KineFilamentContext* ctx, float x, float y, float z);
 KINE_API void Kine_Filament_SetCameraDirection(KineFilamentContext* ctx, float dx, float dy, float dz);
 
+// shape: 1 = cube, 2 = sphere, 3 = pyramid,
+//        10 = move gizmo, 11 = rotate gizmo, 12 = scale gizmo
 KINE_API KineFilamentMesh* Kine_Filament_CreateMesh(KineFilamentContext* ctx, int shape);
+KINE_API KineFilamentMesh* Kine_Filament_CreateMeshFromPath(KineFilamentContext* ctx, const char* path);
 KINE_API void Kine_Filament_DestroyMesh(KineFilamentContext* ctx, KineFilamentMesh* mesh);
 KINE_API void Kine_Filament_DebugPrintPixel(KineFilamentContext* ctx);
+KINE_API KineFilamentGizmo* Kine_Filament_CreateGizmo(KineFilamentContext* ctx, int gizmoType);
+KINE_API void Kine_Filament_DestroyGizmo(KineFilamentContext* ctx, KineFilamentGizmo* gizmo);
 
 KINE_API KineFilamentTex* Kine_Filament_CreateTex(KineFilamentContext* ctx, const KineGLTextureInfo* texture);
 KINE_API void             Kine_Filament_DestroyTex(KineFilamentContext* ctx, KineFilamentTex* tex);
@@ -89,7 +154,7 @@ KINE_API void             Kine_Filament_DestroyTex(KineFilamentContext* ctx, Kin
 // ---------------------------------------------------------------------------
 // DrawMeshEx -- queues a mesh to be drawn this frame with a chosen material.
 //
-//   materialKind : one of KINE_MAT_DEFAULT / KINE_MAT_GLASS / KINE_MAT_NEON / KINE_MAT_WATER
+//   materialKind : one of KINE_MAT_DEFAULT / KINE_MAT_GLASS / KINE_MAT_NEON / KINE_MAT_WATER / KINE_MAT_OUTLINE
 //   r,g,b        : base/emissive color [0..1]
 //   param1       : roughness (default/glass/water) or intensity (neon)
 //   param2       : metallic (default) or ior (glass/water) -- unused for neon
@@ -105,6 +170,11 @@ KINE_API KineFilamentMesh* Kine_Filament_CreateCustomMesh(
     int vertexCount,
     const uint16_t* indices,
     int indexCount);
+KINE_API bool Kine_Filament_UpdateCustomMesh(
+    KineFilamentContext* ctx,
+    KineFilamentMesh* mesh,
+    const float* vertexData,
+    int vertexCount);
     
 KINE_API void Kine_Filament_DrawMeshEx(
     KineFilamentContext* ctx,
@@ -121,6 +191,37 @@ KINE_API void Kine_Filament_DrawMeshEx(
     bool   culling,
     KineFilamentTex* tex);
 
+KINE_API void Kine_Filament_DrawMeshList(
+    KineFilamentContext* ctx,
+    const KineFilamentDrawItem* items,
+    uint32_t itemCount);
+
+/* Retained draw stream. Reusing the same streamId/version keeps the existing
+   GPU instance buffers without resubmitting the item array. */
+KINE_API void Kine_Filament_DrawMeshListVersioned(
+    KineFilamentContext* ctx,
+    const KineFilamentDrawItem* items,
+    uint32_t itemCount,
+    uint64_t streamId,
+    uint64_t version);
+
+KINE_API void Kine_Filament_DrawMeshOutline(
+    KineFilamentContext* ctx,
+    KineFilamentMesh*    mesh,
+    float                r, float g, float b,
+    float                thickness,
+    float*               mat4);
+
+KINE_API void Kine_Filament_DrawGizmo(
+    KineFilamentContext* ctx,
+    KineFilamentGizmo*   gizmo,
+    float*               mat4,
+    int                  hoveredAxis,
+    int                  selectedAxis);
+
+// OpenGL path reads the offscreen GL color target. Vulkan builds intentionally
+// keep this disabled unless KINE_FILAMENT_VULKAN_READBACK=ON is set, because a
+// per-frame GPU readback is a debugging path, not the high-performance compositor path.
 KINE_API void Kine_Filament_ReadPixels(KineFilamentContext* ctx, void* outPixels);
 KINE_API int  Kine_Filament_GetWidth(KineFilamentContext* ctx);
 KINE_API int  Kine_Filament_GetHeight(KineFilamentContext* ctx);

@@ -20,14 +20,51 @@ extern "C" {
 
 typedef struct KineSkiaSurface KineSkiaSurface;
 typedef struct KineSkiaImage KineSkiaImage;
+typedef struct KineSkiaVulkanContext KineSkiaVulkanContext;
+
+typedef struct KineSkiaVulkanBackend {
+    void* instance;              /* VkInstance */
+    void* physicalDevice;        /* VkPhysicalDevice */
+    void* device;                /* VkDevice */
+    void* queue;                 /* VkQueue, must support graphics */
+    uint32_t graphicsQueueFamilyIndex;
+    uint32_t maxApiVersion;      /* 0 = let Skia infer/default */
+    void* getInstanceProcAddr;   /* PFN_vkGetInstanceProcAddr */
+    void* getDeviceProcAddr;     /* PFN_vkGetDeviceProcAddr, optional */
+} KineSkiaVulkanBackend;
+
+typedef struct KineSkiaVulkanImageInfo {
+    void* image;                 /* VkImage owned by the engine */
+    uint32_t format;             /* VkFormat */
+    uint32_t imageLayout;        /* VkImageLayout at handoff to Skia */
+    uint32_t imageTiling;        /* VkImageTiling, usually VK_IMAGE_TILING_OPTIMAL */
+    uint32_t imageUsageFlags;    /* VkImageUsageFlags */
+    uint32_t sampleCount;        /* Vulkan sample count as integer, usually 1 */
+    uint32_t levelCount;         /* mip levels, usually 1 */
+    uint32_t currentQueueFamily; /* queue family owning image, or VK_QUEUE_FAMILY_IGNORED */
+} KineSkiaVulkanImageInfo;
 
 /* ---------------- Version ---------------- */
 
 KINE_SKIA_API const char* Kine_Skia_GetVersion(void);
 
+/* ---------------- Vulkan GPU context ----------------
+   These entry points are enabled when kine_skia is built with KINE_SKIA_BACKEND=VULKAN.
+   Skia does not own the Vulkan instance/device/queue; the engine must keep them
+   alive until all Vulkan-backed KineSkiaSurface objects and the context are destroyed. */
+
+KINE_SKIA_API KineSkiaVulkanContext* Kine_Skia_Vulkan_CreateContext(
+    const KineSkiaVulkanBackend* backend);
+KINE_SKIA_API void Kine_Skia_Vulkan_DestroyContext(KineSkiaVulkanContext* context);
+
 /* ---------------- Surface lifecycle ---------------- */
 
 KINE_SKIA_API KineSkiaSurface* Kine_Skia_Surface_Create(int width, int height);
+KINE_SKIA_API KineSkiaSurface* Kine_Skia_Surface_CreateVulkanRenderTarget(
+    KineSkiaVulkanContext* context,
+    int width,
+    int height,
+    const KineSkiaVulkanImageInfo* imageInfo);
 KINE_SKIA_API void Kine_Skia_Surface_Destroy(KineSkiaSurface* surface);
 
 KINE_SKIA_API int Kine_Skia_Surface_GetWidth(const KineSkiaSurface* surface);

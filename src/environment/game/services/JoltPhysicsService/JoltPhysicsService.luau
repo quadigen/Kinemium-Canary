@@ -6,7 +6,6 @@ local ffi = zune.ffi
 local jolt = require("@jolt")
 local lib = jolt.lib
 local Enum = require("@EnumMap")
-local utils = require("@bufferutils")
 local structs = jolt.structs
 local bodyMaker = require("@_BodyMaker")
 
@@ -529,25 +528,144 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 		until game.PlaytestService
 
 		local _PlaytestService = game.PlaytestService
+		local activeContactsByBody = {}
+		local pendingTouchEvents = {}
+		local pendingTouchEventCount = 0
 
-		local _contactListener = structs.JPH_ContactListener_Procs:new({
-			OnContactValidate = ffi.closure({
-				returns = ffi.types.i32, -- JPH_ValidateResult
-				args = {
-					ffi.types.pointer, -- body1 (JPH_Body*)
-					ffi.types.pointer, -- body2 (JPH_Body*)
-					ffi.types.pointer, -- baseOffset (JPH_RVec3*)
-					ffi.types.pointer, -- collisionResult (JPH_CollideShapeResult*)
-				},
-			}, function(body1, body2, baseOffset, collisionResult)
-				print("pasta cat 48")
-				return utils:i32(1) -- JPH_ValidateResult_AcceptContact
-			end),
-			OnContactAdded = ffi.null,
+		local function queueTouchEvent(part, otherPart, ended)
+			pendingTouchEventCount += 1
+			local event = pendingTouchEvents[pendingTouchEventCount]
+			if not event then
+				event = {}
+				pendingTouchEvents[pendingTouchEventCount] = event
+			end
+			event.part = part
+			event.otherPart = otherPart
+			event.ended = ended
+		end
 
+		local function dispatchTouchEvents()
+			for i = 1, pendingTouchEventCount do
+				local event = pendingTouchEvents[i]
+				local part = event.part
+				if part and not rawget(part, "Destroyed") then
+					local touchSignal = rawget(part, event.ended and "TouchEnded" or "Touched")
+					if touchSignal then
+						touchSignal:Fire(event.otherPart)
+					end
+				end
+				event.part = nil
+				event.otherPart = nil
+				event.ended = nil
+			end
+			pendingTouchEventCount = 0
+		end
+
+		local function detachContact(record, emitTouchEnded)
+			if not record.active then
+				return
+			end
+			record.active = false
+
+			local contacts1 = activeContactsByBody[record.body1]
+			if contacts1 then
+				contacts1[record.body2] = nil
+				if next(contacts1) == nil then
+					activeContactsByBody[record.body1] = nil
+				end
+			end
+
+			local contacts2 = activeContactsByBody[record.body2]
+			if contacts2 then
+				contacts2[record.body1] = nil
+				if next(contacts2) == nil then
+					activeContactsByBody[record.body2] = nil
+				end
+			end
+
+			if emitTouchEnded then
+				queueTouchEvent(record.part1, record.part2, true)
+				queueTouchEvent(record.part2, record.part1, true)
+			end
+		end
+
+		local function beginContact(body1, body2)
+			if body1 == body2 then
+				return
+			end
+
+			local part1 = inverseMap[body1]
+			local part2 = inverseMap[body2]
+			if not part1 or not part2 then
+				return
+			end
+
+			local contacts1 = activeContactsByBody[body1]
+			local existing = contacts1 and contacts1[body2]
+			if existing then
+				existing.count += 1
+				return
+			end
+
+			contacts1 = contacts1 or {}
+			activeContactsByBody[body1] = contacts1
+			local contacts2 = activeContactsByBody[body2] or {}
+			activeContactsByBody[body2] = contacts2
+
+			local record = {
+				body1 = body1,
+				body2 = body2,
+				part1 = part1,
+				part2 = part2,
+				count = 1,
+				active = true,
+			}
+			contacts1[body2] = record
+			contacts2[body1] = record
+			queueTouchEvent(part1, part2, false)
+			queueTouchEvent(part2, part1, false)
+		end
+
+		local function endContact(body1, body2)
+			local contacts = activeContactsByBody[body1]
+			local record = contacts and contacts[body2]
+			if not record then
+				return
+			end
+
+			record.count -= 1
+			if record.count <= 0 then
+				detachContact(record, true)
+			end
+		end
+
+		local function clearContactsForBody(bodyID, emitTouchEnded)
+			local contacts = activeContactsByBody[bodyID]
+			if not contacts then
+				return
+			end
+			for _, record in pairs(contacts) do
+				detachContact(record, emitTouchEnded)
+			end
+			activeContactsByBody[bodyID] = nil
+		end
+
+		local onContactAdded = ffi.closure({
+			returns = ffi.types.void,
+			args = { ffi.types.u32, ffi.types.u32, ffi.types.pointer },
+		}, function(body1, body2, _manifold)
+			beginContact(body1, body2)
+		end)
+		local onContactRemoved = ffi.closure({
+			returns = ffi.types.void,
+			args = { ffi.types.u32, ffi.types.u32, ffi.types.u32, ffi.types.u32 },
+		}, function(body1, body2, _subShapeID1, _subShapeID2)
+			endContact(body1, body2)
+		end)
+		local contactListenerProcs = structs.JPH_ContactListener_Procs:new({
+			OnContactAdded = onContactAdded,
 			OnContactPersisted = ffi.null,
-
-			OnContactRemoved = ffi.null,
+			OnContactRemoved = onContactRemoved,
 		})
 
 		log("[Physics] Initializing Jolt Physics...")
@@ -618,9 +736,9 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 
 		local objectVsBroadPhaseFilter = lib.JPH_ObjectVsBroadPhaseLayerFilterTable_Create(
 			broadPhaseLayerInterface,
-			NUM_OBJECT_LAYERS,
+			NUM_BROADPHASE_LAYERS,
 			objectLayerPairFilter,
-			NUM_BROADPHASE_LAYERS
+			NUM_OBJECT_LAYERS
 		)
 		if objectVsBroadPhaseFilter == ffi.null then
 			error("[Physics] Failed to create ObjectVsBroadPhaseLayerFilter")
@@ -646,6 +764,21 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 
 		log("[Physics] Physics system created and initialized")
 
+		local contactListener = lib.JPH_ContactListener_Create()
+		if contactListener == ffi.null then
+			error("[Physics] Failed to create contact listener")
+		end
+		lib.JPH_PhysicsSystem_SetContactListener(physicsSystem, contactListener)
+		local physicsUnloaded = false
+
+		local function pollContactEvents()
+			if physicsUnloaded or contactListener == ffi.null then
+				return
+			end
+			lib.JPH_ContactListener_PollEvents(contactListener, contactListenerProcs, 0)
+			dispatchTouchEvents()
+		end
+
 		setGravity(physicsSystem, -9.81)
 		log("[Physics] Gravity set")
 
@@ -654,10 +787,6 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 			error("[Physics] Failed to get body interface")
 		end
 		log("[Physics] Body interface obtained")
-
-		--local listenerPtr = lib.JPH_ContactListener_Create(ffi.null)
-		--lib.JPH_ContactListener_SetProcs(contactListener)
-		--lib.JPH_PhysicsSystem_SetContactListener(physicsSystem, listenerPtr)
 
 		local _physicsState = {
 			system = physicsSystem,
@@ -683,11 +812,10 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 
 		log("[Physics] Job system created")
 
-		-- Use existing bodyInterface from line 285
-
 		local function RemoveBody(part)
 			local bodyID = bodiesMap[part]
 			if bodyID then
+				clearContactsForBody(bodyID, true)
 				lib.JPH_BodyInterface_RemoveAndDestroyBody(bodyInterface, bodyID)
 				bodiesMap[part] = nil
 				movingBodiesMap[part] = nil
@@ -1860,6 +1988,18 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 			end,
 
 			Unload = function()
+				if physicsUnloaded then
+					return
+				end
+				physicsUnloaded = true
+				lib.JPH_PhysicsSystem_SetContactListener(physicsSystem, ffi.null)
+				if contactListener ~= ffi.null then
+					lib.JPH_ContactListener_Destroy(contactListener)
+					contactListener = ffi.null
+				end
+				table.clear(activeContactsByBody)
+				pendingTouchEventCount = 0
+
 				-- added this function for
 				-- Memory purposes........
 				for part, bodyID in pairs(bodiesMap) do
@@ -1997,17 +2137,16 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 						continue
 					end
 
-					local props = rawget(part, "_props")
-					if props then
-						props.CFrame = cf
-						props.Position = cf.Position
+					if part then
+						part.CFrame = cf
+						part.Position = cf.Position
 
 						if linear ~= Vector3.zero then
-							props.AssemblyLinearVelocity = linear
+							part.AssemblyLinearVelocity = linear
 						end
 
 						if angular ~= Vector3.zero then
-							props.AssemblyAngularVelocity = angular
+							part.AssemblyAngularVelocity = angular
 						end
 
 						rawset(part, "__matrixDirty", true)
@@ -2059,12 +2198,18 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 					end
 				end
 			end
+
+			pollContactEvents()
 		end)
 
 		propTable.AddBody = CreateBodyForPart
 
 		propTable.HandleRendererSignal = function(route, data)
 			if route == "UpdatePart" or route == "AddedPartToRenderPool" then
+				if not data.Parent or not data:IsDescendantOf(game.Workspace) then
+					RemoveBody(data)
+					return
+				end
 				local bodyID = bodiesMap[data]
 				if not bodyID then
 					CreateBodyForPart(data)
@@ -2080,11 +2225,15 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 		KinemiumPhysicsService:SetProperties(propTable)
 
 		local UPS = game:GetService("UnifiedPhysicsService")
-		if UPS then
-			UPS:RegisterEngine("Jolt", propTable)
-			if not UPS:GetPrimaryEngineName() then
-				UPS:SetPrimaryEngine("Jolt")
-			end
+		while not UPS do
+			task.wait()
+			UPS = game:GetService("UnifiedPhysicsService")
+		end
+
+		log("[Physics] Registering Jolt with UnifiedPhysicsService")
+		UPS:RegisterEngine("Jolt", propTable)
+		if not UPS:GetPrimaryEngineName() then
+			UPS:SetPrimaryEngine("Jolt")
 		end
 	end)
 end

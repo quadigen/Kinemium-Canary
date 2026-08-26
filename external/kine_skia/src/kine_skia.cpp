@@ -1,6 +1,7 @@
 #include "kine_skia.h"
 
 #include "include/core/SkCanvas.h"
+#include "include/core/SkColorSpace.h"
 #include "include/core/SkColor.h"
 #include "include/core/SkData.h"
 #include "include/core/SkFont.h"
@@ -30,6 +31,24 @@
 #include "modules/skshaper/include/SkShaper_skunicode.h"
 #include "modules/skshaper/include/SkShaper_harfbuzz.h"
 
+#ifndef KINE_SKIA_BUILD_VULKAN
+#define KINE_SKIA_BUILD_VULKAN 0
+#endif
+
+#if KINE_SKIA_BUILD_VULKAN
+#include "include/gpu/ganesh/GrBackendSurface.h"
+#include "include/gpu/ganesh/GrDirectContext.h"
+#include "include/gpu/ganesh/SkSurfaceGanesh.h"
+#include "include/gpu/ganesh/vk/GrVkBackendSurface.h"
+#include "include/gpu/ganesh/vk/GrVkDirectContext.h"
+#include "include/gpu/ganesh/vk/GrVkTypes.h"
+#include "include/gpu/vk/VulkanBackendContext.h"
+#include "include/gpu/vk/VulkanTypes.h"
+#include "include/private/gpu/vk/SkiaVulkan.h"
+#include "src/gpu/GpuTypesPriv.h"
+#include "src/gpu/vk/vulkanmemoryallocator/VulkanMemoryAllocatorPriv.h"
+#endif
+
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -38,10 +57,21 @@
 
 struct KineSkiaSurface {
     sk_sp<SkSurface> surface;
+#if KINE_SKIA_BUILD_VULKAN
+    sk_sp<GrDirectContext> vulkanContext;
+    GrBackendRenderTarget vulkanRenderTarget;
+#endif
 };
 
 struct KineSkiaImage {
     sk_sp<SkImage> image;
+};
+
+struct KineSkiaVulkanContext {
+#if KINE_SKIA_BUILD_VULKAN
+    sk_sp<GrDirectContext> context;
+    KineSkiaVulkanBackend backend;
+#endif
 };
 
 /* ---------------- Paint helpers ---------------- */
@@ -111,6 +141,96 @@ KINE_SKIA_API const char* Kine_Skia_GetVersion(void)
     return "kine_skia 0.2.0";
 }
 
+/* ---------------- Vulkan GPU context ---------------- */
+
+KINE_SKIA_API KineSkiaVulkanContext* Kine_Skia_Vulkan_CreateContext(
+    const KineSkiaVulkanBackend* backend)
+{
+    if (!backend || !backend->instance || !backend->physicalDevice || !backend->device ||
+        !backend->queue || !backend->getInstanceProcAddr) {
+        return nullptr;
+    }
+
+#if KINE_SKIA_BUILD_VULKAN
+    auto* wrapper = new KineSkiaVulkanContext();
+    wrapper->backend = *backend;
+
+    auto getInstanceProc = reinterpret_cast<PFN_vkGetInstanceProcAddr>(backend->getInstanceProcAddr);
+    auto explicitGetDeviceProc = reinterpret_cast<PFN_vkGetDeviceProcAddr>(backend->getDeviceProcAddr);
+    VkInstance backendInstance = reinterpret_cast<VkInstance>(backend->instance);
+
+    skgpu::VulkanBackendContext vkContext;
+    vkContext.fInstance = reinterpret_cast<VkInstance>(backend->instance);
+    vkContext.fPhysicalDevice = reinterpret_cast<VkPhysicalDevice>(backend->physicalDevice);
+    vkContext.fDevice = reinterpret_cast<VkDevice>(backend->device);
+    vkContext.fQueue = reinterpret_cast<VkQueue>(backend->queue);
+    vkContext.fGraphicsQueueIndex = backend->graphicsQueueFamilyIndex;
+    vkContext.fMaxAPIVersion = backend->maxApiVersion;
+    vkContext.fGetProc = [getInstanceProc, explicitGetDeviceProc, backendInstance](
+        const char* procName,
+        VkInstance instance,
+        VkDevice device) -> PFN_vkVoidFunction {
+        if (!procName || !getInstanceProc) {
+            return nullptr;
+        }
+        if (device != VK_NULL_HANDLE) {
+            PFN_vkGetDeviceProcAddr getDeviceProc = explicitGetDeviceProc;
+            if (!getDeviceProc) {
+                getDeviceProc = reinterpret_cast<PFN_vkGetDeviceProcAddr>(
+                    getInstanceProc(backendInstance, "vkGetDeviceProcAddr"));
+            }
+            if (getDeviceProc) {
+                if (PFN_vkVoidFunction proc = getDeviceProc(device, procName)) {
+                    return proc;
+                }
+            }
+        }
+
+        VkInstance lookupInstance = instance != VK_NULL_HANDLE ? instance : backendInstance;
+        PFN_vkVoidFunction proc = getInstanceProc(lookupInstance, procName);
+        if (!proc) {
+            fprintf(stderr, "kine_skia: Vulkan procedure unavailable: %s\n", procName);
+        }
+        return proc;
+    };
+
+    vkContext.fMemoryAllocator =
+        skgpu::VulkanMemoryAllocators::Make(vkContext, skgpu::ThreadSafe::kYes);
+    if (!vkContext.fMemoryAllocator) {
+        fprintf(stderr, "kine_skia: failed to create Skia Vulkan memory allocator\n");
+        delete wrapper;
+        return nullptr;
+    }
+
+    wrapper->context = GrDirectContexts::MakeVulkan(vkContext);
+    if (!wrapper->context) {
+        fprintf(stderr, "kine_skia: GrDirectContexts::MakeVulkan failed\n");
+        delete wrapper;
+        return nullptr;
+    }
+
+    return wrapper;
+#else
+    (void)backend;
+    return nullptr;
+#endif
+}
+
+KINE_SKIA_API void Kine_Skia_Vulkan_DestroyContext(KineSkiaVulkanContext* context)
+{
+    if (!context) {
+        return;
+    }
+#if KINE_SKIA_BUILD_VULKAN
+    if (context->context) {
+        context->context->flushAndSubmit();
+        context->context->releaseResourcesAndAbandonContext();
+        context->context.reset();
+    }
+#endif
+    delete context;
+}
+
 /* ---------------- Surface lifecycle ---------------- */
 
 KINE_SKIA_API KineSkiaSurface* Kine_Skia_Surface_Create(int width, int height)
@@ -134,6 +254,68 @@ KINE_SKIA_API KineSkiaSurface* Kine_Skia_Surface_Create(int width, int height)
     wrapper->surface->getCanvas()->clear(SK_ColorTRANSPARENT);
 
     return wrapper;
+}
+
+KINE_SKIA_API KineSkiaSurface* Kine_Skia_Surface_CreateVulkanRenderTarget(
+    KineSkiaVulkanContext* context,
+    int width,
+    int height,
+    const KineSkiaVulkanImageInfo* imageInfo)
+{
+    if (width <= 0 || height <= 0 || !context || !imageInfo || !imageInfo->image) {
+        return nullptr;
+    }
+
+#if KINE_SKIA_BUILD_VULKAN
+    if (!context->context) {
+        return nullptr;
+    }
+
+    GrVkImageInfo vkImageInfo;
+    vkImageInfo.fImage = reinterpret_cast<VkImage>(imageInfo->image);
+    vkImageInfo.fImageTiling = imageInfo->imageTiling
+        ? static_cast<VkImageTiling>(imageInfo->imageTiling)
+        : VK_IMAGE_TILING_OPTIMAL;
+    vkImageInfo.fImageLayout = static_cast<VkImageLayout>(imageInfo->imageLayout);
+    vkImageInfo.fFormat = static_cast<VkFormat>(imageInfo->format);
+    vkImageInfo.fImageUsageFlags = static_cast<VkImageUsageFlags>(imageInfo->imageUsageFlags);
+    vkImageInfo.fSampleCount = imageInfo->sampleCount ? imageInfo->sampleCount : 1;
+    vkImageInfo.fLevelCount = imageInfo->levelCount ? imageInfo->levelCount : 1;
+    vkImageInfo.fCurrentQueueFamily = imageInfo->currentQueueFamily;
+
+    GrBackendRenderTarget renderTarget = GrBackendRenderTargets::MakeVk(width, height, vkImageInfo);
+    if (!renderTarget.isValid()) {
+        return nullptr;
+    }
+
+    SkColorType colorType = kRGBA_8888_SkColorType;
+    if (vkImageInfo.fFormat == VK_FORMAT_B8G8R8A8_UNORM ||
+        vkImageInfo.fFormat == VK_FORMAT_B8G8R8A8_SRGB) {
+        colorType = kBGRA_8888_SkColorType;
+    }
+
+    sk_sp<SkSurface> surface = SkSurfaces::WrapBackendRenderTarget(
+        context->context.get(),
+        renderTarget,
+        kTopLeft_GrSurfaceOrigin,
+        colorType,
+        nullptr,
+        nullptr);
+
+    if (!surface) {
+        return nullptr;
+    }
+
+    KineSkiaSurface* wrapper = new KineSkiaSurface();
+    wrapper->surface = std::move(surface);
+    wrapper->vulkanContext = context->context;
+    wrapper->vulkanRenderTarget = renderTarget;
+    return wrapper;
+#else
+    (void)context;
+    (void)imageInfo;
+    return nullptr;
+#endif
 }
 
 KINE_SKIA_API void Kine_Skia_Surface_Destroy(KineSkiaSurface* surface)
@@ -181,9 +363,16 @@ KINE_SKIA_API void* Kine_Skia_Surface_GetPixels(KineSkiaSurface* surface)
 
 KINE_SKIA_API void Kine_Skia_Surface_Flush(KineSkiaSurface* surface)
 {
-    (void)surface;
-    /* Raster surfaces are synchronous; nothing to flush. Kept as a stable
-       no-op entry point in case a GPU-backed surface is added later. */
+    if (!surface || !surface->surface) {
+        return;
+    }
+#if KINE_SKIA_BUILD_VULKAN
+    if (surface->vulkanContext) {
+        skgpu::ganesh::FlushAndSubmit(surface->surface.get());
+        surface->vulkanContext->flushAndSubmit();
+    }
+#endif
+    /* Raster surfaces are synchronous. */
 }
 
 KINE_SKIA_API void Kine_Skia_Surface_GetPixel(

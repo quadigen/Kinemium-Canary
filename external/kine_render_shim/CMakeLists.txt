@@ -89,8 +89,22 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
 # FILAMENT_DIR should contain include/ and lib/x86_64/ (or lib/arm64/ on
 # Apple Silicon -- override FILAMENT_LIB_ARCH if so).
 option(KINE_WITH_FILAMENT "Build the Filament integration (kine_filament_shim)" ON)
+option(KINE_WITH_ASSIMP "Use Assimp for Kine_Filament_CreateMeshFromPath" ON)
+option(KINE_FILAMENT_VULKAN_READBACK "Allow slow Vulkan readPixels compatibility path for debugging" OFF)
+set(KINE_FILAMENT_BACKEND "VULKAN" CACHE STRING "Filament backend: VULKAN or OPENGL")
+set_property(CACHE KINE_FILAMENT_BACKEND PROPERTY STRINGS VULKAN OPENGL)
 
 if(KINE_WITH_FILAMENT)
+    string(TOUPPER "${KINE_FILAMENT_BACKEND}" KINE_FILAMENT_BACKEND_UPPER)
+    if(NOT KINE_FILAMENT_BACKEND_UPPER STREQUAL "VULKAN" AND NOT KINE_FILAMENT_BACKEND_UPPER STREQUAL "OPENGL")
+        message(FATAL_ERROR "KINE_FILAMENT_BACKEND must be VULKAN or OPENGL")
+    endif()
+    if(KINE_FILAMENT_BACKEND_UPPER STREQUAL "VULKAN")
+        set(KINE_MATC_BACKEND "vulkan")
+    else()
+        set(KINE_MATC_BACKEND "opengl")
+    endif()
+
     if(NOT DEFINED FILAMENT_DIR)
         include(FetchContent)
         set(FILAMENT_VERSION "1.74.0")
@@ -115,6 +129,7 @@ if(KINE_WITH_FILAMENT)
         )
         FetchContent_MakeAvailable(filament_prebuilt)
         set(FILAMENT_DIR ${filament_prebuilt_SOURCE_DIR})
+        set(FILAMENT_DIR ${filament_prebuilt_SOURCE_DIR} CACHE PATH "Filament SDK root" FORCE)
     endif()
 
     if(NOT DEFINED FILAMENT_LIB_ARCH)
@@ -143,7 +158,7 @@ if(KINE_WITH_FILAMENT)
 
         add_custom_command(
             OUTPUT  ${_bin}
-            COMMAND ${MATC_EXE} -a opengl -p desktop -o ${_bin} ${_src}
+            COMMAND ${MATC_EXE} -a ${KINE_MATC_BACKEND} -p desktop -o ${_bin} ${_src}
             DEPENDS ${_src}
             COMMENT "Compiling Filament material: ${NAME}.mat"
         )
@@ -164,6 +179,30 @@ if(KINE_WITH_FILAMENT)
     kine_add_material(kine_neon)
     kine_add_material(kine_water)
     kine_add_material(kine_decal)
+    kine_add_material(kine_outline)
+
+    set(KINE_ASSIMP_TARGET "")
+    if(KINE_WITH_ASSIMP)
+        find_package(assimp CONFIG QUIET)
+        if(NOT TARGET assimp::assimp)
+            set(ASSIMP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+            set(ASSIMP_BUILD_ASSIMP_TOOLS OFF CACHE BOOL "" FORCE)
+            set(ASSIMP_INSTALL OFF CACHE BOOL "" FORCE)
+            FetchContent_Declare(
+                assimp
+                GIT_REPOSITORY https://github.com/assimp/assimp.git
+                GIT_TAG v5.4.3
+                GIT_SHALLOW TRUE
+            )
+            FetchContent_MakeAvailable(assimp)
+        endif()
+
+        if(TARGET assimp::assimp)
+            set(KINE_ASSIMP_TARGET assimp::assimp)
+        elseif(TARGET assimp)
+            set(KINE_ASSIMP_TARGET assimp)
+        endif()
+    endif()
 
     add_library(kine_filament_shim
         src/kine_filament_shim.cpp
@@ -172,14 +211,24 @@ if(KINE_WITH_FILAMENT)
         ${kine_neon_GEN_CPP}
         ${kine_water_GEN_CPP}
         ${kine_decal_GEN_CPP}
+        ${kine_outline_GEN_CPP}
     )
 
     target_include_directories(kine_filament_shim
         PUBLIC
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../kine_vulkan_compositor/include
+            ${CMAKE_BINARY_DIR}/kine_skia/skia-src/third_party/externals/vulkan-headers/include
             ${FILAMENT_DIR}/include
             ${MAT_GEN_DIR}
+    )
+
+    target_compile_definitions(kine_filament_shim
+        PRIVATE
+            $<$<STREQUAL:${KINE_FILAMENT_BACKEND_UPPER},VULKAN>:KINE_FILAMENT_USE_VULKAN=1>
+            $<$<BOOL:${KINE_FILAMENT_VULKAN_READBACK}>:KINE_FILAMENT_ENABLE_VULKAN_READBACK=1>
+            $<$<BOOL:${KINE_ASSIMP_TARGET}>:KINE_WITH_ASSIMP=1>
     )
 
     if(WIN32)
@@ -192,9 +241,9 @@ if(KINE_WITH_FILAMENT)
         target_link_directories(kine_filament_shim PUBLIC ${FILAMENT_DIR}/lib/${FILAMENT_LIB_ARCH})
     endif()
 
-    # This is the link line the Filament README itself documents for
-    # consuming a prebuilt release (minus JNI/matc-only pieces we don't
-    # need: filamat, vkshaders, bluevk -- we're OpenGL-only here).
+    # Filament's prebuilt backend archive contains both Vulkan and OpenGL
+    # factories. Static linking therefore needs both loader archives even
+    # when this shim selects Vulkan exclusively at runtime.
     set(KINE_FILAMENT_CORE_LIBS
         filament
         backend
@@ -214,6 +263,7 @@ if(KINE_WITH_FILAMENT)
         target_link_libraries(kine_filament_shim
             PRIVATE
                 ${KINE_SDL3_TARGET}
+                ${KINE_ASSIMP_TARGET}
                 ${KINE_FILAMENT_CORE_LIBS}
                 gdi32 user32 opengl32
         )
@@ -221,6 +271,7 @@ if(KINE_WITH_FILAMENT)
         target_link_libraries(kine_filament_shim
             PRIVATE
                 ${KINE_SDL3_TARGET}
+                ${KINE_ASSIMP_TARGET}
                 ${KINE_FILAMENT_CORE_LIBS}
                 "-framework Cocoa"
                 "-framework OpenGL"
@@ -238,6 +289,7 @@ if(KINE_WITH_FILAMENT)
         target_link_libraries(kine_filament_shim
             PRIVATE
                 ${KINE_SDL3_TARGET}
+                ${KINE_ASSIMP_TARGET}
                 -Wl,--start-group
                 ${KINE_FILAMENT_CORE_LIBS}
                 -Wl,--end-group

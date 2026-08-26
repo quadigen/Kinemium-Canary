@@ -12,6 +12,9 @@ local datamodel_ref = nil
 
 function UnifiedPhysicsService:RegisterEngine(name, handler)
 	engines[name] = handler
+	if datamodel_ref and not activeEngineName then
+		self:SetPrimaryEngine(name)
+	end
 end
 
 function UnifiedPhysicsService:SetPrimaryEngine(name)

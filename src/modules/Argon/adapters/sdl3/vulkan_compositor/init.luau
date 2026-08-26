@@ -1,13 +1,11 @@
 --!strict
 --!optimize 2
--- Made by FFIGen (Kinemium)
 
 local ffi = zune.ffi
-
-local funcs = require("./skia/funcs")
+local funcs = require("./vulkan_compositor/funcs")
 local zembed = require("@zembed")
 
-local libname = "kine_skia." .. ffi.suffix
+local libname = "KinemiumLibs." .. ffi.suffix
 
 local function getLibraryPath(): string
 	if zembed.IsEmbedded() then
@@ -30,8 +28,8 @@ local function getLibraryPath(): string
 	return paths[1]
 end
 
-local skia: typeof(funcs) = ffi.dlopen(getLibraryPath(), funcs)
+local lib = ffi.dlopen(getLibraryPath(), funcs)
 
 return {
-	lib = skia,
+	lib = lib :: funcs.Fns,
 }

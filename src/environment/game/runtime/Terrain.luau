@@ -693,12 +693,15 @@ Terrain.InitRenderer = function(renderer, renderer_signal, datamodel)
 	end
 
 	local function releaseChunkResources(chunk)
+		if chunk.mesh then
+			meshgen.destroyMesh(chunk.mesh)
+			chunk.mesh = nil
+		end
 		if chunk._cpuMeshData then
-			r3d.lib.R3D_UnloadMeshData(chunk._cpuMeshData)
+			meshgen.destroyMeshData(chunk._cpuMeshData)
 			chunk._cpuMeshData = nil
 		end
 		if chunk.grassInstanceBuffer then
-			pcall(rlib.R3D_UnloadInstanceBuffer, chunk.grassInstanceBuffer)
 			chunk.grassInstanceBuffer = nil
 			chunk.grassInstanceCount = nil
 		end
@@ -1036,8 +1039,12 @@ Terrain.InitRenderer = function(renderer, renderer_signal, datamodel)
 			angleThreshold = 90,
 			tolerance = Terrain.VoxelSize * 0.05,
 		})
+		if chunk.mesh then
+			meshgen.destroyMesh(chunk.mesh)
+			chunk.mesh = nil
+		end
 		if chunk._cpuMeshData then
-			r3d.lib.R3D_UnloadMeshData(chunk._cpuMeshData)
+			meshgen.destroyMeshData(chunk._cpuMeshData)
 			chunk._cpuMeshData = nil
 		end
 
@@ -1045,8 +1052,10 @@ Terrain.InitRenderer = function(renderer, renderer_signal, datamodel)
 			indicesAreZeroBased = true,
 			usage = meshgen.Usage.Dynamic,
 		})
-		chunk._cpuMeshData = result[1]
-		chunk.mesh = result[2]
+		if result then
+			chunk._cpuMeshData = result[1]
+			chunk.mesh = result[2]
+		end
 		chunk.dirty = false
 
 		local PhysicsService = datamodel:GetService("UnifiedPhysicsService")
@@ -1117,7 +1126,6 @@ Terrain.InitRenderer = function(renderer, renderer_signal, datamodel)
 
 	function Terrain:_spawnGrassForChunk(chunk)
 		if chunk.grassInstanceBuffer then
-			pcall(rlib.R3D_UnloadInstanceBuffer, chunk.grassInstanceBuffer)
 			chunk.grassInstanceBuffer = nil
 			chunk.grassInstanceCount = nil
 		end
@@ -1206,10 +1214,6 @@ Terrain.InitRenderer = function(renderer, renderer_signal, datamodel)
 		if #instances == 0 then
 			return
 		end
-
-		local buf, n = grassgen.createGrassInstanceBuffer(rlib, instances)
-		chunk.grassInstanceBuffer = buf
-		chunk.grassInstanceCount = n
 	end
 
 	function Terrain:_captureReplicationSettings()

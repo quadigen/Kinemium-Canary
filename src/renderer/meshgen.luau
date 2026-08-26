@@ -1,27 +1,12 @@
 local ffi = zune.ffi
+local argon = require("@Argon")
 
-local U32 = 4294967296
 local TWO_PI = math.pi * 2
 local EPSILON = 1e-8
-
-local function readPtr64FromBuffer(buf: buffer, offset: number)
-	local lo = buffer.readu32(buf, offset)
-	local hi = buffer.readu32(buf, offset + 4)
-	return lo + (hi * U32)
-end
-
-local function ptrFromStructFieldBuf(structBuf: buffer, fieldOff: number)
-	local addr = readPtr64FromBuffer(structBuf, fieldOff)
-	if addr == 0 then
-		return ffi.null
-	end
-	local b = buffer.create(8)
-	local hi = math.floor(addr / U32)
-	local lo = addr - (hi * U32)
-	buffer.writeu32(b, 0, lo)
-	buffer.writeu32(b, 4, hi)
-	return ffi.ptrFromAddress(b)
-end
+local FILAMENT_VERTEX_FLOATS = 8
+local FILAMENT_VERTEX_BYTES = FILAMENT_VERTEX_FLOATS * 4
+local MAX_UINT16 = 65535
+local activeWindow = nil
 
 local function vec3(v: any)
 	if type(v) == "table" then
@@ -97,55 +82,23 @@ local function normalFrom(a, b, c)
 	return faceNormal(ax, ay, az, bx, by, bz, cx, cy, cz)
 end
 
-local _offsets = nil
-local function getOffsets()
-	if _offsets then
-		return _offsets
-	end
-	_offsets = {
-		vertexSize = r3dstructs.R3D_Vertex:size(),
-		pos = r3dstructs.R3D_Vertex:offset("position"),
-		uv = r3dstructs.R3D_Vertex:offset("texcoord"),
-		normal = r3dstructs.R3D_Vertex:offset("normal"),
-		color = r3dstructs.R3D_Vertex:offset("color"),
-		tangent = r3dstructs.R3D_Vertex:offset("tangent"),
-		boneIds = r3dstructs.R3D_Vertex:offset("boneIds"),
-		weights = r3dstructs.R3D_Vertex:offset("weights"),
-		mdVertices = r3dstructs.R3D_MeshData:offset("vertices"),
-		mdIndices = r3dstructs.R3D_MeshData:offset("indices"),
-		mdVertexCount = r3dstructs.R3D_MeshData:offset("vertexCount"),
-		mdIndexCount = r3dstructs.R3D_MeshData:offset("indexCount"),
-	}
-	return _offsets
-end
-
-local function writeVertex(ptr, base, off, px, py, pz, nx, ny, nz, u, v, r, g, b, a, tx, ty, tz, tw)
-	ptr:writef32(base + off.pos + 0, px)
-	ptr:writef32(base + off.pos + 4, py)
-	ptr:writef32(base + off.pos + 8, pz)
-	ptr:writef32(base + off.uv + 0, u)
-	ptr:writef32(base + off.uv + 4, v)
-	ptr:writef32(base + off.normal + 0, nx)
-	ptr:writef32(base + off.normal + 4, ny)
-	ptr:writef32(base + off.normal + 8, nz)
-	ptr:writeu8(base + off.color + 0, r)
-	ptr:writeu8(base + off.color + 1, g)
-	ptr:writeu8(base + off.color + 2, b)
-	ptr:writeu8(base + off.color + 3, a)
-	ptr:writef32(base + off.tangent + 0, tx)
-	ptr:writef32(base + off.tangent + 4, ty)
-	ptr:writef32(base + off.tangent + 8, tz)
-	ptr:writef32(base + off.tangent + 12, tw)
-	for k = 0, 3 do
-		ptr:writei32(base + off.boneIds + k * 4, 0)
-	end
-	for k = 0, 3 do
-		ptr:writef32(base + off.weights + k * 4, 0)
-	end
+local function writeFilamentVertex(ptr, base, px, py, pz, nx, ny, nz, u, v)
+	ptr:writef32(base + 0, px)
+	ptr:writef32(base + 4, py)
+	ptr:writef32(base + 8, pz)
+	ptr:writef32(base + 12, nx)
+	ptr:writef32(base + 16, ny)
+	ptr:writef32(base + 20, nz)
+	ptr:writef32(base + 24, u)
+	ptr:writef32(base + 28, v)
 end
 
 -- meshgen
 local meshgen = {}
+
+function meshgen.setWindow(window)
+	activeWindow = window
+end
 
 meshgen.Primitive =
 	{ Points = 0, Lines = 1, LineStrip = 2, LineLoop = 3, Triangles = 4, TriangleStrip = 5, TriangleFan = 6 }
@@ -683,6 +636,10 @@ function meshgen.buildMeshData(vertices, indices, opts)
 		warn("meshgen.buildMeshData: no vertices")
 		return nil
 	end
+	if vcount > MAX_UINT16 then
+		warn(`meshgen.buildMeshData: {vcount} vertices exceeds Filament's 16-bit mesh limit ({MAX_UINT16})`)
+		return nil
+	end
 
 	if not idxs then
 		idxs = table.create(vcount)
@@ -708,20 +665,16 @@ function meshgen.buildMeshData(vertices, indices, opts)
 		meshgen.generateTangents(verts, idxs)
 	end
 
-	local meshData = r3d.R3D_LoadMeshData(vcount, icount)
-	local off = getOffsets()
-	local verticesPtr = ptrFromStructFieldBuf(meshData, off.mdVertices)
-	local indicesPtr = ptrFromStructFieldBuf(meshData, off.mdIndices)
-
-	if verticesPtr == ffi.null then
-		warn("meshgen.buildMeshData: vertices pointer is null")
+	if icount <= 0 then
+		warn("meshgen.buildMeshData: no indices")
 		return nil
 	end
 
-	local vsize = off.vertexSize
+	local vertexData = ffi.alloc(vcount * FILAMENT_VERTEX_BYTES, 4)
+	local indexData = ffi.alloc(icount * 2, 2)
 	for i = 1, vcount do
 		local v = verts[i]
-		local base = (i - 1) * vsize
+		local base = (i - 1) * FILAMENT_VERTEX_BYTES
 		local px, py, pz = vec3(v.position or v.pos or v[1] or v)
 		local hasN = v.normal ~= nil or v.n ~= nil
 		local nx, ny, nz = vec3(v.normal or v.n)
@@ -729,25 +682,94 @@ function meshgen.buildMeshData(vertices, indices, opts)
 			nx, ny, nz = 0, 1, 0
 		end
 		local u, w = vec2(v.uv or v.texcoord or v.t)
-		local r, g, b, a = colorRGBA(v.color or v.c)
-		local tan = v.tangent or v.tan
-		local tx, ty, tz, tw = 0, 0, 0, 1
-		if tan then
-			tx, ty, tz = vec3(tan)
-			tw = tan.w or tan.W or tan[4] or 1
-		end
-		writeVertex(verticesPtr, base, off, px, py, pz, nx, ny, nz, u, w, r, g, b, a, tx, ty, tz, tw)
+		writeFilamentVertex(vertexData, base, px, py, pz, nx, ny, nz, u, w)
 	end
 
-	if icount > 0 and indicesPtr ~= ffi.null then
-		for i = 1, icount do
-			indicesPtr:writeu32((i - 1) * 4, idxs[i])
+	for i = 1, icount do
+		local index = idxs[i]
+		if type(index) ~= "number" or index % 1 ~= 0 or index < 0 or index >= vcount then
+			ffi.free(vertexData)
+			ffi.free(indexData)
+			warn(`meshgen.buildMeshData: index {i} is outside the vertex range`)
+			return nil
 		end
+		indexData:writeu16((i - 1) * 2, index)
 	end
 
-	buffer.writei32(meshData, off.mdVertexCount, vcount)
-	buffer.writei32(meshData, off.mdIndexCount, icount)
-	return meshData
+	return {
+		_type = "FilamentMeshData",
+		vertexData = vertexData,
+		indexData = indexData,
+		vertexCount = vcount,
+		indexCount = icount,
+		vertices = verts,
+		indices = idxs,
+		released = false,
+	}
+end
+
+function meshgen.destroyMeshData(meshData)
+	if type(meshData) ~= "table" or meshData._type ~= "FilamentMeshData" or meshData.released then
+		return
+	end
+	if meshData.vertexData and meshData.vertexData ~= ffi.null then
+		ffi.free(meshData.vertexData)
+	end
+	if meshData.indexData and meshData.indexData ~= ffi.null then
+		ffi.free(meshData.indexData)
+	end
+	meshData.vertexData = nil
+	meshData.indexData = nil
+	meshData.released = true
+end
+
+function meshgen.destroyMesh(mesh)
+	if type(mesh) ~= "table" or not mesh._handle then
+		return
+	end
+	local window = mesh._window or activeWindow
+	if window then
+		argon:DestroyMesh(window, mesh)
+	end
+end
+
+function meshgen.updateMesh(mesh, meshData)
+	if
+		type(mesh) ~= "table"
+		or not mesh._handle
+		or type(meshData) ~= "table"
+		or meshData._type ~= "FilamentMeshData"
+		or meshData.released
+	then
+		return false
+	end
+	local window = mesh._window or activeWindow
+	if not window then
+		return false
+	end
+	return argon:UpdateCustomMesh(window, mesh, meshData.vertexData, meshData.vertexCount)
+end
+
+local function createFilamentMesh(meshData, opts)
+	local primitive = (opts and opts.primitive) or meshgen.Primitive.Triangles
+	if primitive ~= meshgen.Primitive.Triangles then
+		warn("meshgen: Filament custom meshes currently support triangle primitives only")
+		return nil
+	end
+
+	local window = (opts and opts.window) or activeWindow
+	if not window or not window._3dhandle or window._3dhandle == ffi.null then
+		warn("meshgen: no active Filament window; call meshgen.setWindow(window) before building meshes")
+		return nil
+	end
+
+	return argon:CreateCustomMesh(
+		window,
+		meshData.vertexData,
+		meshData.vertexCount,
+		meshData.indexData,
+		meshData.indexCount
+	)
 end
 
 function meshgen.buildMesh(vertices, indices, opts)
@@ -755,10 +777,8 @@ function meshgen.buildMesh(vertices, indices, opts)
 	if not meshData then
 		return nil
 	end
-	local primitive = (opts and opts.primitive) or meshgen.Primitive.Triangles
-	local usage = (opts and opts.usage) or meshgen.Usage.Static
-	local mesh = r3d.R3D_LoadMesh(primitive, meshData, ffi.null, usage)
-	r3d.R3D_UnloadMeshData(meshData)
+	local mesh = createFilamentMesh(meshData, opts)
+	meshgen.destroyMeshData(meshData)
 	return mesh
 end
 
@@ -767,68 +787,32 @@ function meshgen.buildMeshWithData(vertices, indices, opts)
 	if not meshData then
 		return nil
 	end
-	local primitive = (opts and opts.primitive) or meshgen.Primitive.Triangles
-	local usage = (opts and opts.usage) or meshgen.Usage.Static
-	local mesh = r3d.R3D_LoadMesh(primitive, meshData, ffi.null, usage)
-	-- meshData is intentionally NOT unloaded here
+	local mesh = createFilamentMesh(meshData, opts)
+	if not mesh then
+		meshgen.destroyMeshData(meshData)
+		return nil
+	end
 	return { meshData, mesh }
 end
 
 function meshgen.extractModelMesh(model, meshIndex)
 	meshIndex = meshIndex or 0
-
-	local meshCount = buffer.readi32(model, r3dstructs.R3D_Model:offset("meshCount"))
-	if meshCount == 0 then
-		print("meshgen.extractModelMesh: model has no meshes")
-		return nil
-	end
-	if meshIndex >= meshCount then
-		print(`meshgen.extractModelMesh: meshIndex {meshIndex} out of range (0-{meshCount - 1})`)
+	if type(model) ~= "table" then
+		warn("meshgen.extractModelMesh: expected an Argon mesh source table")
 		return nil
 	end
 
-	-- Read material data from the model
-	local meshMaterialsPtr = ptrFromStructFieldBuf(model, r3dstructs.R3D_Model:offset("meshMaterials"))
-	local materialIndex = 0
-	if meshMaterialsPtr ~= ffi.null then
-		materialIndex = buffer.readi32(meshMaterialsPtr:read(meshIndex * 4, buffer.create(4), 0, 4), 0)
+	local source = model
+	if model.meshes then
+		source = model.meshes[meshIndex + 1]
 	end
-
-	local materialsPtr = ptrFromStructFieldBuf(model, r3dstructs.R3D_Model:offset("materials"))
-	local materialBuf = nil
-	if materialsPtr ~= ffi.null then
-		local matSize = r3dstructs.R3D_Material:size()
-		materialBuf = materialsPtr:read(materialIndex * matSize, buffer.create(matSize), 0, matSize)
-	end
-
-	-- Read CPU-side mesh data from the model's meshData array
-	local meshDataPtr = ptrFromStructFieldBuf(model, r3dstructs.R3D_Model:offset("meshData"))
-	if meshDataPtr == ffi.null then
-		print("meshgen.extractModelMesh: model meshData pointer is null")
+	if not source or type(source.vertices) ~= "table" or #source.vertices == 0 then
+		warn(`meshgen.extractModelMesh: meshIndex {meshIndex} has no CPU vertices`)
 		return nil
 	end
 
-	local meshDataSize = r3dstructs.R3D_MeshData:size()
-	local meshDataBuf = meshDataPtr:read(meshIndex * meshDataSize, buffer.create(meshDataSize), 0, meshDataSize)
-
-	local off = getOffsets()
-	local vertexCount = buffer.readi32(meshDataBuf, off.mdVertexCount)
-	local indexCount = buffer.readi32(meshDataBuf, off.mdIndexCount)
-
-	if vertexCount <= 0 then
-		print("meshgen.extractModelMesh: mesh has no vertices")
-		return nil
-	end
-
-	local verticesPtr = ptrFromStructFieldBuf(meshDataBuf, off.mdVertices)
-	local indicesPtr = ptrFromStructFieldBuf(meshDataBuf, off.mdIndices)
-
-	if verticesPtr == ffi.null then
-		print("meshgen.extractModelMesh: vertices pointer is null")
-		return nil
-	end
-
-	local vsize = off.vertexSize
+	local sourceVertices = source.vertices
+	local vertexCount = #sourceVertices
 
 	-- First pass: read all vertex positions and compute AABB
 	local minX, minY, minZ = math.huge, math.huge, math.huge
@@ -838,15 +822,13 @@ function meshgen.extractModelMesh(model, meshIndex)
 	local positionsY = table.create(vertexCount)
 	local positionsZ = table.create(vertexCount)
 
-	for i = 0, vertexCount - 1 do
-		local base = i * vsize
-		local px = verticesPtr:readf32(base + off.pos + 0)
-		local py = verticesPtr:readf32(base + off.pos + 4)
-		local pz = verticesPtr:readf32(base + off.pos + 8)
+	for i = 1, vertexCount do
+		local vertex = sourceVertices[i]
+		local px, py, pz = vec3(vertex.position or vertex.pos or vertex[1] or vertex)
 
-		positionsX[i + 1] = px
-		positionsY[i + 1] = py
-		positionsZ[i + 1] = pz
+		positionsX[i] = px
+		positionsY[i] = py
+		positionsZ[i] = pz
 
 		minX = math.min(px, minX)
 		minY = math.min(py, minY)
@@ -865,9 +847,9 @@ function meshgen.extractModelMesh(model, meshIndex)
 	local centerZ = (minZ + maxZ) * 0.5
 
 	-- Protect against degenerate (zero-size) axes
-	sizeX = math.min(EPSILON, sizeX)
-	sizeY = math.min(EPSILON, sizeY)
-	sizeZ = math.min(EPSILON, sizeZ)
+	sizeX = math.max(EPSILON, sizeX)
+	sizeY = math.max(EPSILON, sizeY)
+	sizeZ = math.max(EPSILON, sizeZ)
 
 	-- Build normalized vertices: center at origin, scale to unit cube
 	-- Each axis is independently scaled so that the AABB maps to [-0.5, 0.5]
@@ -876,52 +858,25 @@ function meshgen.extractModelMesh(model, meshIndex)
 	local invSizeZ = 1 / sizeZ
 
 	local verts = table.create(vertexCount)
-	for i = 0, vertexCount - 1 do
-		local base = i * vsize
-
+	for i = 1, vertexCount do
+		local sourceVertex = sourceVertices[i]
 		-- Normalize position: center at origin, fit to unit cube
-		local px = (positionsX[i + 1] - centerX) * invSizeX
-		local py = (positionsY[i + 1] - centerY) * invSizeY
-		local pz = (positionsZ[i + 1] - centerZ) * invSizeZ
+		local px = (positionsX[i] - centerX) * invSizeX
+		local py = (positionsY[i] - centerY) * invSizeY
+		local pz = (positionsZ[i] - centerZ) * invSizeZ
 
-		local nx = verticesPtr:readf32(base + off.normal + 0)
-		local ny = verticesPtr:readf32(base + off.normal + 4)
-		local nz = verticesPtr:readf32(base + off.normal + 8)
-
-		local u = verticesPtr:readf32(base + off.uv + 0)
-		local v = verticesPtr:readf32(base + off.uv + 4)
-
-		local cr = verticesPtr:readu8(base + off.color + 0)
-		local cg = verticesPtr:readu8(base + off.color + 1)
-		local cb = verticesPtr:readu8(base + off.color + 2)
-		local ca = verticesPtr:readu8(base + off.color + 3)
-
-		local tx = verticesPtr:readf32(base + off.tangent + 0)
-		local ty = verticesPtr:readf32(base + off.tangent + 4)
-		local tz = verticesPtr:readf32(base + off.tangent + 8)
-		local tw = verticesPtr:readf32(base + off.tangent + 12)
-
-		verts[i + 1] = {
+		verts[i] = {
 			position = { px, py, pz },
-			normal = { nx, ny, nz },
-			uv = { u, v },
-			color = { cr, cg, cb, ca },
-			tangent = { tx, ty, tz, tw },
+			normal = sourceVertex.normal or sourceVertex.n,
+			uv = sourceVertex.uv or sourceVertex.texcoord or sourceVertex.t,
+			color = sourceVertex.color or sourceVertex.c,
+			tangent = sourceVertex.tangent or sourceVertex.tan,
 		}
 	end
 
-	-- Read indices
-	local idxs = nil
-	if indexCount > 0 and indicesPtr ~= ffi.null then
-		idxs = table.create(indexCount)
-		for i = 0, indexCount - 1 do
-			idxs[i + 1] = indicesPtr:readu32(i * 4)
-		end
-	end
-
 	-- Build a new GPU mesh from the normalized data
-	local result = meshgen.buildMeshWithData(verts, idxs, {
-		indicesAreZeroBased = true,
+	local result = meshgen.buildMeshWithData(verts, source.indices, {
+		indicesAreZeroBased = source.indicesAreZeroBased == true,
 	})
 
 	if not result then
@@ -934,7 +889,7 @@ function meshgen.extractModelMesh(model, meshIndex)
 
 	return {
 		_meshgenHandle = gpuMesh,
-		_materialHandle = materialBuf,
+		_materialHandle = source.material,
 		_cpuMeshData = cpuMeshData,
 		aabb = {
 			min = { x = minX, y = minY, z = minZ },
@@ -1619,16 +1574,20 @@ local function buildPrimitive(verts, indices, opts)
 end
 
 function meshgen.buildPlane(w, d, seg, color, opts)
-	return buildPrimitive(meshgen.genPlane(w, d, seg, color), nil, opts)
+	local vertices, indices = meshgen.genPlane(w, d, seg, color)
+	return buildPrimitive(vertices, indices, opts)
 end
 function meshgen.buildSphere(r, st, sl, color, opts)
-	return buildPrimitive(meshgen.genSphere(r, st, sl, color), nil, opts)
+	local vertices, indices = meshgen.genSphere(r, st, sl, color)
+	return buildPrimitive(vertices, indices, opts)
 end
 function meshgen.buildBox(sx, sy, sz, color, opts)
-	return buildPrimitive(meshgen.genBox(sx, sy, sz, color), nil, opts)
+	local vertices, indices = meshgen.genBox(sx, sy, sz, color)
+	return buildPrimitive(vertices, indices, opts)
 end
 function meshgen.buildCapsule(r, h, st, sl, color, opts)
-	return buildPrimitive(meshgen.genCapsule(r, h, st, sl, color), nil, opts)
+	local vertices, indices = meshgen.genCapsule(r, h, st, sl, color)
+	return buildPrimitive(vertices, indices, opts)
 end
 function meshgen.buildCylinder(rb, rt, h, sl, cap, color, opts)
 	local v, i = meshgen.genCylinder(rb, rt, h, sl, cap, color)

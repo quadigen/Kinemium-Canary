@@ -586,7 +586,6 @@ local JPH_SimShapeFilter_Procs = ffi.struct({
 export type JPH_SimShapeFilter_Procs = typeof(JPH_SimShapeFilter_Procs:new({}))
 
 local JPH_ContactListener_Procs = ffi.struct({
-	{ OnContactValidate = ffi.types.pointer },
 	{ OnContactAdded = ffi.types.pointer },
 	{ OnContactPersisted = ffi.types.pointer },
 	{ OnContactRemoved = ffi.types.pointer },

@@ -105,6 +105,18 @@ return {
 			end
 		end
 
+		local function releaseGeneratedMesh(self)
+			if self._meshgenHandle then
+				meshgen.destroyMesh(self._meshgenHandle)
+			end
+			if self._cpuMeshData then
+				meshgen.destroyMeshData(self._cpuMeshData)
+			end
+			self._mesh = nil
+			self._meshgenHandle = nil
+			self._cpuMeshData = nil
+		end
+
 		-- description: "Adds a vertex position to the mesh and returns its vertex id."
 		-- args: "p: Vector3"
 		-- returns: "number"
@@ -708,9 +720,7 @@ return {
 			local rawVertices, indices = buildRawGeometry(self)
 
 			if #rawVertices == 0 then
-				self._mesh = nil
-				self._meshgenHandle = nil
-				self._cpuMeshData = nil
+				releaseGeneratedMesh(self)
 				self._geometryDirty = false
 				notifyLinkedMeshParts()
 				return
@@ -738,8 +748,10 @@ return {
 				end
 			end
 
-			-- Use buildMeshWithData to retain the CPU-side R3D_MeshData for raycasting.
+			-- Retain Filament's packed CPU data for mesh raycasts.
 			local result = meshgen.buildMeshWithData(rawVertices, indices, buildOpts)
+			local oldMesh = self._meshgenHandle
+			local oldMeshData = self._cpuMeshData
 			if result then
 				self._cpuMeshData = result[1]
 				self._mesh = result[2]
@@ -748,6 +760,12 @@ return {
 				self._cpuMeshData = nil
 				self._mesh = nil
 				self._meshgenHandle = nil
+			end
+			if oldMesh then
+				meshgen.destroyMesh(oldMesh)
+			end
+			if oldMeshData then
+				meshgen.destroyMeshData(oldMeshData)
 			end
 			self._geometryDirty = false
 			notifyLinkedMeshParts()
@@ -1077,6 +1095,11 @@ return {
 
 			return closestP or Vector3.new(), closestDist, closestFace
 		end
+
+		instance.Destroying:Connect(function()
+			releaseGeneratedMesh(instance)
+			notifyLinkedMeshParts()
+		end)
 
 		return instance
 	end,

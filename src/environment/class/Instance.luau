@@ -208,6 +208,12 @@ function instance_mt.__newindex(self, key, value)
 		props[key] = value
 	end
 
+	local propertyHandlers = rawget(self, "_propertyHandlers")
+	local propertyHandler = propertyHandlers and propertyHandlers[key]
+	if propertyHandler then
+		propertyHandler(value)
+	end
+
 	if rawget(self, "Changed") then
 		self.Changed:Fire(key, value)
 	end
@@ -702,6 +708,15 @@ function Instance:RemoveBarrier(property)
 	if barriers then
 		barriers[property] = nil
 	end
+end
+
+function Instance:_SetPropertyHandler(property, callback)
+	local handlers = rawget(self, "_propertyHandlers")
+	if not handlers then
+		handlers = {}
+		rawset(self, "_propertyHandlers", handlers)
+	end
+	handlers[property] = callback
 end
 
 function Instance:WaitForChild(name, timeout)

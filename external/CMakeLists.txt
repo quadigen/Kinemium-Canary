@@ -27,8 +27,12 @@ endif()
 
 set(KINE_WITH_FILAMENT ON CACHE BOOL "" FORCE)
 set(KINE_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(KINE_SKIA_BUILD_SHARED ON CACHE BOOL "Isolate Skia's VMA implementation from Filament" FORCE)
+set(KINE_FILAMENT_BACKEND VULKAN CACHE STRING "Use the unified Vulkan compositor path for Filament and Skia" FORCE)
+set(KINE_FILAMENT_VULKAN_READBACK OFF CACHE BOOL "" FORCE)
 add_subdirectory(kine_render_shim)
 add_subdirectory(kine_skia)
+add_subdirectory(kine_vulkan_compositor)
 
 # Manifold
 set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
@@ -60,6 +64,7 @@ add_subdirectory(nativefiledialog)
 # sdl_image
 set(SDLIMAGE_DEPS_SHARED OFF CACHE BOOL "" FORCE)
 set(SDLIMAGE_AVIF OFF CACHE BOOL "Support loading AVIF images" FORCE)
+set(SDLIMAGE_PNG_LIBPNG OFF CACHE BOOL "Use stb_image for PNG to avoid a second vendored zlib target" FORCE)
 add_subdirectory(SDL_image)
 
 # Jolt Wrapper
@@ -70,6 +75,10 @@ foreach(_kine_export_target IN ITEMS kine_render_shim kine_filament_shim)
         target_compile_definitions(${_kine_export_target} PRIVATE KINE_BUILD_SHARED KINE_BUILD_EXPORTS)
     endif()
 endforeach()
+
+if(TARGET kine_vulkan_compositor)
+    target_compile_definitions(kine_vulkan_compositor PRIVATE KINE_BUILD_SHARED KINE_VULKAN_COMPOSITOR_BUILD_EXPORTS)
+endif()
 
 if(TARGET box2d)
     target_compile_definitions(box2d PRIVATE box2d_EXPORTS)
@@ -128,19 +137,37 @@ set_target_properties(KinemiumLibs PROPERTIES
     ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
 )
 
+if(APPLE)
+    set_target_properties(KinemiumLibs PROPERTIES
+        BUILD_RPATH "@loader_path"
+        INSTALL_RPATH "@loader_path"
+    )
+elseif(UNIX)
+    set_target_properties(KinemiumLibs PROPERTIES
+        BUILD_RPATH "$ORIGIN"
+        INSTALL_RPATH "$ORIGIN"
+    )
+endif()
+
 if(WIN32)
     set_target_properties(KinemiumLibs PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 endif()
 
 function(kine_link_whole_archive target dependency)
     if(TARGET ${dependency})
-        target_link_libraries(${target} PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,${dependency}>")
+        get_target_property(_kine_dependency_type ${dependency} TYPE)
+        if(_kine_dependency_type STREQUAL "STATIC_LIBRARY")
+            target_link_libraries(${target} PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,${dependency}>")
+        else()
+            target_link_libraries(${target} PRIVATE ${dependency})
+        endif()
     endif()
 endfunction()
 
 kine_link_whole_archive(KinemiumLibs kine_render_shim)
 kine_link_whole_archive(KinemiumLibs kine_filament_shim)
 kine_link_whole_archive(KinemiumLibs kine_skia)
+kine_link_whole_archive(KinemiumLibs kine_vulkan_compositor)
 kine_link_whole_archive(KinemiumLibs JoltWrapper)
 kine_link_whole_archive(KinemiumLibs box2d)
 kine_link_whole_archive(KinemiumLibs nfd)
@@ -157,8 +184,9 @@ target_link_libraries(KinemiumLibs
 
 if(WIN32)
     target_link_libraries(KinemiumLibs PRIVATE
-        user32 gdi32 ole32 shell32 opengl32 advapi32 imm32 setupapi version winmm
+        user32 gdi32 ole32 shell32 opengl32 advapi32 imm32 setupapi version winmm delayimp
     )
+    target_link_options(KinemiumLibs PRIVATE "/DELAYLOAD:kine_skia.dll")
 elseif(APPLE)
     target_link_libraries(KinemiumLibs PRIVATE
         "-framework AppKit"

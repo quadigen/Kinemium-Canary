@@ -8,7 +8,16 @@ type FFIPointer = typeof(ffi.types.pointer)
 export type Fns = {
 	Kine_Skia_GetVersion: () -> cstring,
 
+	Kine_Skia_Vulkan_CreateContext: (backend: FFIPointer) -> FFIPointer,
+	Kine_Skia_Vulkan_DestroyContext: (context: FFIPointer) -> (),
+
 	Kine_Skia_Surface_Create: (width: int, height: int) -> FFIPointer,
+	Kine_Skia_Surface_CreateVulkanRenderTarget: (
+		context: FFIPointer,
+		width: int,
+		height: int,
+		imageInfo: FFIPointer
+	) -> FFIPointer,
 	Kine_Skia_Surface_Destroy: (surface: FFIPointer) -> (),
 
 	Kine_Skia_Surface_GetWidth: (surface: FFIPointer) -> int,
@@ -206,6 +215,26 @@ local funcs = {
 		args = {
 			ffi.types.i32,
 			ffi.types.i32,
+		},
+	},
+
+	Kine_Skia_Vulkan_CreateContext = {
+		returns = ffi.types.pointer,
+		args = { ffi.types.pointer },
+	},
+
+	Kine_Skia_Vulkan_DestroyContext = {
+		returns = ffi.types.void,
+		args = { ffi.types.pointer },
+	},
+
+	Kine_Skia_Surface_CreateVulkanRenderTarget = {
+		returns = ffi.types.pointer,
+		args = {
+			ffi.types.pointer,
+			ffi.types.i32,
+			ffi.types.i32,
+			ffi.types.pointer,
 		},
 	},
 

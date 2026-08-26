@@ -1,5 +1,11 @@
 export type Mesh = {
-	material: string,
+	_handle: any?,
+	_window: Window?,
+	material: string?,
+}
+
+export type Gizmo = {
+	_handle: any,
 }
 
 export type Image = {

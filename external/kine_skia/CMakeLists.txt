@@ -5,7 +5,11 @@ project(kine_skia VERSION 0.1.0 LANGUAGES CXX)
 include(ExternalProject)
 
 option(KINE_BUILD_SHARED "Build Kinemium native wrappers as shared libraries" ON)
+option(KINE_SKIA_BUILD_SHARED "Build the Skia wrapper as an isolated shared library" ${KINE_BUILD_SHARED})
 option(KINE_SKIA_AUTO_DOWNLOAD "Download and build Skia automatically when KINE_SKIA_DIR is not set" ON)
+option(KINE_SKIA_UPDATE_DISCONNECTED "Do not update the downloaded Skia checkout during normal builds" ON)
+set(KINE_SKIA_BACKEND "VULKAN" CACHE STRING "Skia build backend: VULKAN or RASTER")
+set_property(CACHE KINE_SKIA_BACKEND PROPERTY STRINGS VULKAN RASTER)
 set(KINE_SKIA_GIT_TAG "main" CACHE STRING "Skia git tag, branch, or commit to download")
 set(KINE_SKIA_BUILD_NAME "Kinemium" CACHE STRING "Skia GN output directory name under out/")
 set(KINE_SKIA_LIBRARY "" CACHE FILEPATH "Path to an already built Skia library")
@@ -17,7 +21,7 @@ if(KINE_SKIA_LIBRARY)
     set(KINE_SKIA_PREBUILT_LIBRARY_PROVIDED ON)
 endif()
 
-if(KINE_BUILD_SHARED)
+if(KINE_SKIA_BUILD_SHARED)
     set(KINE_SKIA_LIBRARY_TYPE SHARED)
 else()
     set(KINE_SKIA_LIBRARY_TYPE STATIC)
@@ -38,10 +42,11 @@ target_compile_definitions(kine_skia
     PRIVATE
         KINE_SKIA_BUILD_EXPORTS
     PUBLIC
-        $<$<BOOL:${KINE_BUILD_SHARED}>:KINE_BUILD_SHARED>
+        $<$<BOOL:${KINE_SKIA_BUILD_SHARED}>:KINE_BUILD_SHARED>
 )
 
 set_target_properties(kine_skia PROPERTIES
+    PREFIX ""
     CXX_VISIBILITY_PRESET hidden
     VISIBILITY_INLINES_HIDDEN ON
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
@@ -81,6 +86,23 @@ if(NOT KINE_SKIA_LIBRARY)
     )
 endif()
 
+string(TOUPPER "${KINE_SKIA_BACKEND}" KINE_SKIA_BACKEND_UPPER)
+if(NOT KINE_SKIA_BACKEND_UPPER STREQUAL "VULKAN" AND NOT KINE_SKIA_BACKEND_UPPER STREQUAL "RASTER")
+    message(FATAL_ERROR "KINE_SKIA_BACKEND must be VULKAN or RASTER")
+endif()
+
+if(KINE_SKIA_BACKEND_UPPER STREQUAL "VULKAN")
+    find_package(Vulkan QUIET)
+    if(NOT Vulkan_FOUND)
+        message(WARNING
+            "Vulkan SDK was not found by CMake. Kine Skia will still build the "
+            "Vulkan wrapper against Skia's vendored Vulkan headers when available; "
+            "install the Vulkan SDK or set Vulkan_LIBRARY/Vulkan_INCLUDE_DIR if "
+            "your linker later needs vulkan-1.lib."
+        )
+    endif()
+endif()
+
 add_library(kine_skia_skiacore STATIC IMPORTED GLOBAL)
 set_target_properties(kine_skia_skiacore PROPERTIES
     IMPORTED_LOCATION "${KINE_SKIA_LIBRARY}"
@@ -97,13 +119,25 @@ if(NOT KINE_SKIA_DIR AND NOT KINE_SKIA_PREBUILT_LIBRARY_PROVIDED)
     set(KINE_SKIA_GN_ARGS
         "is_debug=false"
         "is_official_build=false"
+        "skia_enable_ganesh=true"
         "skia_enable_svg=true"
-        "skia_use_libpng=true"
         "skia_use_freetype=true"
         "skia_use_system_freetype2=false"
         "skia_use_harfbuzz=true"
         "skia_use_dng_sdk=false"
     )
+
+    if(KINE_SKIA_BACKEND_UPPER STREQUAL "VULKAN")
+        list(APPEND KINE_SKIA_GN_ARGS
+            "skia_use_vulkan=true"
+            "skia_use_gl=false"
+        )
+    else()
+        list(APPEND KINE_SKIA_GN_ARGS
+            "skia_use_vulkan=false"
+            "skia_use_gl=false"
+        )
+    endif()
 
     if(WIN32)
         list(APPEND KINE_SKIA_GN_ARGS
@@ -134,6 +168,7 @@ if(NOT KINE_SKIA_DIR AND NOT KINE_SKIA_PREBUILT_LIBRARY_PROVIDED)
         GIT_REPOSITORY "https://skia.googlesource.com/skia.git"
         GIT_TAG "${KINE_SKIA_GIT_TAG}"
         GIT_SHALLOW FALSE
+        UPDATE_DISCONNECTED "${KINE_SKIA_UPDATE_DISCONNECTED}"
         SOURCE_DIR "${KINE_SKIA_SOURCE_DIR}"
         BUILD_IN_SOURCE TRUE
         CONFIGURE_COMMAND
@@ -161,10 +196,24 @@ target_include_directories(kine_skia
         "${KINE_SKIA_INCLUDE_DIR}"
 )
 
+if(KINE_SKIA_BACKEND_UPPER STREQUAL "VULKAN")
+    target_include_directories(kine_skia
+        PRIVATE
+            "${KINE_SKIA_SOURCE_DIR}/third_party/externals/vulkan-headers/include"
+    )
+endif()
+
 target_link_libraries(kine_skia
     PRIVATE
         kine_skia_skiacore
 )
+
+if(KINE_SKIA_BACKEND_UPPER STREQUAL "VULKAN")
+    target_compile_definitions(kine_skia PRIVATE KINE_SKIA_BUILD_VULKAN=1)
+    if(Vulkan_FOUND)
+        target_link_libraries(kine_skia PRIVATE Vulkan::Vulkan)
+    endif()
+endif()
 
 if(WIN32)
     target_link_libraries(kine_skia PRIVATE user32 gdi32 ole32 shell32)

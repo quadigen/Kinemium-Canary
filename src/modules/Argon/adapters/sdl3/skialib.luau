@@ -8,6 +8,16 @@ function SkiaAdapter:Init(width, height)
 	return skia.lib.Kine_Skia_Surface_Create(width, height)
 end
 
+function SkiaAdapter:CreateVulkanContext(backend)
+	return skia.lib.Kine_Skia_Vulkan_CreateContext(backend)
+end
+
+function SkiaAdapter:DestroyVulkanContext(context)
+	if context then
+		skia.lib.Kine_Skia_Vulkan_DestroyContext(context)
+	end
+end
+
 function SkiaAdapter:Clear(context, color: typedefs.Color)
 	skia.lib.Kine_Skia_Surface_Clear(
 		context,
@@ -54,6 +64,12 @@ end
 
 function SkiaAdapter:CreateImage(path): typedefs.Image
 	return skia.lib.Kine_Skia_Image_LoadFromFile(path)
+end
+
+function SkiaAdapter:DestroyImage(image)
+	if image and image ~= zune.ffi.null then
+		skia.lib.Kine_Skia_Image_Destroy(image)
+	end
 end
 
 function SkiaAdapter:MeasureText(text: string, size: number, font: typedefs.Font)

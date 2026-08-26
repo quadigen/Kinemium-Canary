@@ -6,34 +6,8 @@ local Color3 = require("@Color3")
 local signal = require("@Kinemium.signal")
 local meshgen = require("@meshgen")
 
-local r3d = require("@r3d")
-local rlib = r3d.lib
-local r3dstructs = r3d.structs
-local r3dconst = r3d.constants
-local adapter = require("@RaylibAdapter")
 local lib = adapter.lib
 local ffi = zune.ffi
-
-local U32_MOD = 4294967296
-
-local function readPtr64(buf: buffer, offset: number): number
-	local lo = buffer.readu32(buf, offset)
-	local hi = buffer.readu32(buf, offset + 4)
-	return lo + hi * U32_MOD
-end
-
-local function ptrFromStructField(structBuf: buffer, fieldOff: number): any
-	local addr = readPtr64(structBuf, fieldOff)
-	if addr == 0 then
-		return ffi.null
-	end
-	local b = buffer.create(8)
-	local hi = math.floor(addr / U32_MOD)
-	local lo = addr - hi * U32_MOD
-	buffer.writeu32(b, 0, lo)
-	buffer.writeu32(b, 4, hi)
-	return ffi.ptrFromAddress(b)
-end
 
 -- ============================================================================
 -- Math helpers
@@ -230,13 +204,8 @@ return {
 		local surfaceShader = nil
 		local renderId = nil
 		local renderMatrix = lib.MatrixIdentity()
-
-		-- Mesh layout offsets (cached once)
-		local off_vs = 0
-		local off_pos = 0
-		local off_norm = 0
-		local off_mdV = 0
-		local offCached = false
+		local fluidDrawCall = {}
+		local fluidDrawList = { fluidDrawCall }
 
 		--  Simulation state
 		local simW = math.max(4, math.min(64, math.floor(instance.SimResolution or 16)))
@@ -628,11 +597,11 @@ return {
 		--  GPU mesh build/rebuild
 		local function buildMesh()
 			if gpuMesh then
-				pcall(rlib.R3D_UnloadMesh, gpuMesh)
+				meshgen.destroyMesh(gpuMesh)
 				gpuMesh = nil
 			end
 			if cpuMeshData then
-				pcall(rlib.R3D_UnloadMeshData, cpuMeshData)
+				meshgen.destroyMeshData(cpuMeshData)
 				cpuMeshData = nil
 			end
 
@@ -667,34 +636,26 @@ return {
 				gpuMesh = result[2]
 			end
 
-			if not offCached then
-				off_vs = r3dstructs.R3D_Vertex:size()
-				off_pos = r3dstructs.R3D_Vertex:offset("position")
-				off_norm = r3dstructs.R3D_Vertex:offset("normal")
-				off_mdV = r3dstructs.R3D_MeshData:offset("vertices")
-				offCached = true
-			end
-
 			activeWaves = buildWaveConfig()
 			renderMatrix = lib.MatrixIdentity()
 		end
 
 		--  Vertex deformation
 		local function updateMeshVerts(t: number)
-			if not cpuMeshData or not gpuMesh or not offCached then
+			if not cpuMeshData or not gpuMesh or cpuMeshData.released then
 				return
 			end
-			local vptr = ptrFromStructField(cpuMeshData, off_mdV)
-			if vptr == ffi.null then
+			local vptr = cpuMeshData.vertexData
+			if not vptr or vptr == ffi.null then
 				return
 			end
 
 			local pos = instance.Position
 			local size = instance.Size
 			local floorY = pos.Y - size.Y * 0.5
-			local vs = off_vs
-			local poff = off_pos
-			local noff = off_norm
+			local vs = 32
+			local poff = 0
+			local noff = 12
 
 			for i = 1, vertCount do
 				local p = gridPositions[i]
@@ -724,7 +685,7 @@ return {
 				vptr:writef32(base + noff + 8, nz)
 			end
 
-			pcall(rlib.R3D_UpdateMesh, gpuMesh, cpuMeshData, ffi.null)
+			meshgen.updateMesh(gpuMesh, cpuMeshData)
 		end
 
 		--  Shader uniforms
@@ -1060,10 +1021,21 @@ return {
 			if not instance.Enabled then
 				return
 			end
-			if not gpuMesh or not material then
+			if not gpuMesh then
 				return
 			end
-			renderer.MeshPool.DrawMesh(gpuMesh, material, renderMatrix)
+			fluidDrawCall.mesh = gpuMesh
+			fluidDrawCall.matrix = renderMatrix
+			fluidDrawCall.color = instance.Color or Color3.new(0.05, 0.35, 0.72)
+			fluidDrawCall.roughness = instance.Roughness or 0.07
+			fluidDrawCall.metallic = 1.333
+			fluidDrawCall.MaterialKind = 3
+			fluidDrawCall.MaterialTileScale = 1
+			fluidDrawCall.transmission = math.clamp(1 - (instance.Transparency or 0.42), 0, 1)
+			fluidDrawCall.CastShadow = false
+			fluidDrawCall.RecieveShadow = true
+			fluidDrawCall.Culling = false
+			renderer.MeshPool.DrawMeshList(fluidDrawList, 1)
 		end)
 
 		-- ====================================================================
@@ -1134,11 +1106,11 @@ return {
 				renderId = nil
 			end
 			if gpuMesh then
-				pcall(rlib.R3D_UnloadMesh, gpuMesh)
+				meshgen.destroyMesh(gpuMesh)
 				gpuMesh = nil
 			end
 			if cpuMeshData then
-				pcall(rlib.R3D_UnloadMeshData, cpuMeshData)
+				meshgen.destroyMeshData(cpuMeshData)
 				cpuMeshData = nil
 			end
 			if surfaceShader then

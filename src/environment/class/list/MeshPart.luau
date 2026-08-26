@@ -24,6 +24,7 @@ return {
 
 	callback = function(instance, renderer, game)
 		instance:SetProperties(propTable)
+		Part.setupTouchSignals(instance, renderer)
 		instance:SetMetadata("IsMovable", true)
 
 		local KinemiumPhysicsService = game and game:GetService("UnifiedPhysicsService") or nil

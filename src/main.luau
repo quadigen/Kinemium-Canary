@@ -309,6 +309,7 @@ else
 	renderer = KiRend.new({
 		width = 1000,
 		height = 800,
+		WGI = GetFlagValue("wgi") or (FlagExists("opengl") and "opengl" or "vulkan"),
 		autoScale3D = autoScale3D,
 		max3DRenderPixels = if max3DRenderPixels > 0 then math.floor(max3DRenderPixels) else 0,
 		min3DRenderScale = min3DRenderScale,

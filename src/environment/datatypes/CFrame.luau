@@ -149,25 +149,42 @@ end
 
 function CFrame.__mul(a, b)
 	if typeof(b) == "table" and b.X and b.Y and b.Z and not b.Position then
-		-- Vector3 check (has coordinates but not a nested Position)
-		return a.Position
-			+ Vector3.new(
-				a.Rotation[1][1] * b.X + a.Rotation[1][2] * b.Y + a.Rotation[1][3] * b.Z,
-				a.Rotation[2][1] * b.X + a.Rotation[2][2] * b.Y + a.Rotation[2][3] * b.Z,
-				a.Rotation[3][1] * b.X + a.Rotation[3][2] * b.Y + a.Rotation[3][3] * b.Z
-			)
+		local p = a.Position
+		local r = a.Rotation
+		return Vector3.new(
+			p.X + r[1][1] * b.X + r[1][2] * b.Y + r[1][3] * b.Z,
+			p.Y + r[2][1] * b.X + r[2][2] * b.Y + r[2][3] * b.Z,
+			p.Z + r[3][1] * b.X + r[3][2] * b.Y + r[3][3] * b.Z
+		)
 	elseif typeof(b) == "table" and b.Position and b.Rotation then
-		-- CFrame check
-		local pos = a.Position
-			+ Vector3.new(
-				a.Rotation[1][1] * b.Position.X + a.Rotation[1][2] * b.Position.Y + a.Rotation[1][3] * b.Position.Z,
-				a.Rotation[2][1] * b.Position.X + a.Rotation[2][2] * b.Position.Y + a.Rotation[2][3] * b.Position.Z,
-				a.Rotation[3][1] * b.Position.X + a.Rotation[3][2] * b.Position.Y + a.Rotation[3][3] * b.Position.Z
-			)
-		local rot = mulRotation(a.Rotation, b.Rotation)
-		local cf = CFrame.new(pos)
-		cf.Rotation = rot
-		return cf
+		local ap = a.Position
+		local bp = b.Position
+		local ar = a.Rotation
+		local br = b.Rotation
+		return setmetatable({
+			Position = Vector3.new(
+				ap.X + ar[1][1] * bp.X + ar[1][2] * bp.Y + ar[1][3] * bp.Z,
+				ap.Y + ar[2][1] * bp.X + ar[2][2] * bp.Y + ar[2][3] * bp.Z,
+				ap.Z + ar[3][1] * bp.X + ar[3][2] * bp.Y + ar[3][3] * bp.Z
+			),
+			Rotation = {
+				{
+					ar[1][1] * br[1][1] + ar[1][2] * br[2][1] + ar[1][3] * br[3][1],
+					ar[1][1] * br[1][2] + ar[1][2] * br[2][2] + ar[1][3] * br[3][2],
+					ar[1][1] * br[1][3] + ar[1][2] * br[2][3] + ar[1][3] * br[3][3],
+				},
+				{
+					ar[2][1] * br[1][1] + ar[2][2] * br[2][1] + ar[2][3] * br[3][1],
+					ar[2][1] * br[1][2] + ar[2][2] * br[2][2] + ar[2][3] * br[3][2],
+					ar[2][1] * br[1][3] + ar[2][2] * br[2][3] + ar[2][3] * br[3][3],
+				},
+				{
+					ar[3][1] * br[1][1] + ar[3][2] * br[2][1] + ar[3][3] * br[3][1],
+					ar[3][1] * br[1][2] + ar[3][2] * br[2][2] + ar[3][3] * br[3][2],
+					ar[3][1] * br[1][3] + ar[3][2] * br[2][3] + ar[3][3] * br[3][3],
+				},
+			},
+		}, CFrame)
 	end
 	error("CFrame can only be multiplied by Vector3 or CFrame (got " .. typeof(b) .. ")")
 end

@@ -46,9 +46,6 @@ local propTable = {
 	_mesh = nil,
 	_manifoldptr = nil,
 
-	Touched = signal.new(),
-	TouchEnded = signal.new(),
-
 	-- Velocity
 	AssemblyAngularVelocity = Vector3.new(0, 0, 0),
 	AssemblyCenterOfMass = Vector3.new(0, 0, 0),
@@ -60,17 +57,18 @@ local propTable = {
 	NetworkOwnerType = Enum.MachineNetworkOwner.Server,
 }
 
-local function UpdateManifoldPointer(instance)
+local function UpdateManifoldPointer(instance, sizeOverride)
+	local size = sizeOverride or instance.Size
 	if instance.Shape == Enum.PartType.Block then
 		manifold.gen.free(instance._manifoldptr)
-		instance._manifoldptr = manifold.gen.box(instance.Size.X, instance.Size.Y, instance.Size.Z)
+		instance._manifoldptr = manifold.gen.box(size.X, size.Y, size.Z)
 	elseif instance.Shape == Enum.PartType.Ball then
-		local radius = instance.Size.X * 0.5
+		local radius = size.X * 0.5
 		manifold.gen.free(instance._manifoldptr)
 		instance._manifoldptr = manifold.gen.sphere(radius, 32)
 	elseif instance.Shape == Enum.PartType.Cylinder then
-		local radius = instance.Size.X * 0.5
-		local height = instance.Size.Y
+		local radius = size.X * 0.5
+		local height = size.Y
 		local segments = 24
 
 		manifold.gen.free(instance._manifoldptr)
@@ -107,16 +105,37 @@ local function syncFromPosition(instance, position)
 	props.CFrame = props.CFrame:WithPosition(position)
 end
 
+local function setupTouchSignals(instance, renderer)
+	if rawget(instance, "Touched") and rawget(instance, "TouchEnded") then
+		return
+	end
+
+	local touched = signal.new()
+	local touchEnded = signal.new()
+	rawset(instance, "Touched", touched)
+	rawset(instance, "TouchEnded", touchEnded)
+
+	instance.Destroying:Connect(function()
+		if renderer and renderer.EventBus then
+			renderer.EventBus:Fire("RemovedPartFromRenderPool", instance)
+		end
+		touched:Destroy()
+		touchEnded:Destroy()
+		rawset(instance, "Touched", nil)
+		rawset(instance, "TouchEnded", nil)
+	end)
+end
+
 return {
 	class = "Part",
+	setupTouchSignals = setupTouchSignals,
 
 	callback = function(instance, renderer, game)
 		instance:SetMetadata("IsMovable", true)
 
 		local KinemiumPhysicsService = game:GetService("UnifiedPhysicsService")
-		local syncingTransform = false
-
 		instance:SetProperties(propTable)
+		setupTouchSignals(instance, renderer)
 		syncFromCFrame(instance, instance.CFrame)
 		if renderer and renderer.EventBus then
 			renderer.EventBus:Fire("UpdatePart", instance)
@@ -148,35 +167,30 @@ return {
 		end
 
 		UpdateManifoldPointer(instance)
+		instance:SetBarrier("CFrame", function(value)
+			syncFromCFrame(instance, value)
+			return true
+		end)
+		instance:SetBarrier("Position", function(value)
+			syncFromPosition(instance, value)
+			return true
+		end)
+		instance:SetBarrier("Size", function(value)
+			UpdateManifoldPointer(instance, value)
+			return true
+		end)
+
+		instance:_SetPropertyHandler("Parent", function()
+			if renderer and renderer.EventBus then
+				local route = instance.Parent and "UpdatePart" or "RemovedPartFromRenderPool"
+				renderer.EventBus:Fire(route, instance)
+			end
+		end)
 
 		instance.Destroying:Connect(function()
-			instance.Touched = nil
-			instance.TouchEnded = nil
 			instance._mesh = nil
 
 			manifold.gen.free(instance._manifoldptr)
-		end)
-
-		instance.Changed:Connect(function(property, value)
-			if syncingTransform then
-				return
-			end
-
-			if property == "CFrame" then
-				syncingTransform = true
-				syncFromCFrame(instance, value)
-				syncingTransform = false
-			elseif property == "Position" then
-				syncingTransform = true
-				syncFromPosition(instance, value)
-				syncingTransform = false
-			elseif property == "Parent" then
-				if renderer and renderer.EventBus then
-					renderer.EventBus:Fire("UpdatePart", instance)
-				end
-			elseif property == "Size" then
-				UpdateManifoldPointer(instance)
-			end
 		end)
 
 		return instance

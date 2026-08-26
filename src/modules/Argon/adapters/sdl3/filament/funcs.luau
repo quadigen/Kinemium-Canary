@@ -14,18 +14,25 @@ local KineMaterialKind = {
 	Glass = 1,
 	Neon = 2,
 	Water = 3,
+	Outline = 4,
 }
 
 export type Fns = {
 	-- Context lifecycle
 	Kine_Filament_Create: (width: int, height: int) -> FFIPointer,
+	Kine_Filament_CreateForSDLWindow: (sdlWindow: FFIPointer, width: int, height: int) -> FFIPointer,
+	Kine_Filament_CreateForVulkanCompositor: (vulkanCompositor: FFIPointer, width: int, height: int) -> FFIPointer,
+	Kine_Filament_CreateForVulkanCompositorWindow: (sdlWindow: FFIPointer, width: int, height: int) -> FFIPointer,
+	Kine_Filament_GetVulkanCompositor: (ctx: FFIPointer) -> FFIPointer,
 	Kine_Filament_Destroy: (ctx: FFIPointer) -> (),
 	Kine_Filament_RenderFrame: (ctx: FFIPointer, deltaTime: float) -> (),
 	Kine_Filament_Resize: (ctx: FFIPointer, width: int, height: int) -> (),
+	Kine_Filament_SetViewport: (ctx: FFIPointer, x: int, y: int, width: int, height: int) -> (),
 	Kine_Filament_ReadPixels: (ctx: FFIPointer, outPixels: FFIPointer) -> (),
 	Kine_Filament_GetWidth: (ctx: FFIPointer) -> int,
 	Kine_Filament_GetHeight: (ctx: FFIPointer) -> int,
 	Kine_Filament_GetColorTextureId: (ctx: FFIPointer) -> uint,
+	Kine_Filament_GetVulkanBackend: (ctx: FFIPointer, outBackend: FFIPointer) -> bool,
 	Kine_Filament_DebugPrintPixel: (ctx: FFIPointer) -> (),
 
 	Kine_Filament_CreateSky: (ctx: FFIPointer, r: float, g: float, b: float, a: float) -> (),
@@ -96,9 +103,12 @@ export type Fns = {
 	) -> (),
 
 	-- Mesh system
-	-- shape: 1 = cube, 2 = sphere, 3 = pyramid
+	-- shape: 1 = cube, 2 = sphere, 3 = pyramid, 10 = move gizmo, 11 = rotate gizmo, 12 = scale gizmo
 	Kine_Filament_CreateMesh: (ctx: FFIPointer, shape: int) -> FFIPointer,
+	Kine_Filament_CreateMeshFromPath: (ctx: FFIPointer, path: cstring) -> FFIPointer,
 	Kine_Filament_DestroyMesh: (ctx: FFIPointer, mesh: FFIPointer) -> (),
+	Kine_Filament_CreateGizmo: (ctx: FFIPointer, gizmoType: int) -> FFIPointer,
+	Kine_Filament_DestroyGizmo: (ctx: FFIPointer, gizmo: FFIPointer) -> (),
 
 	-- Custom mesh: interleaved vertexData is px,py,pz,nx,ny,nz,u,v (8 floats/vertex)
 	Kine_Filament_CreateCustomMesh: (
@@ -108,6 +118,12 @@ export type Fns = {
 		indices: FFIPointer,
 		indexCount: int
 	) -> FFIPointer,
+	Kine_Filament_UpdateCustomMesh: (
+		ctx: FFIPointer,
+		mesh: FFIPointer,
+		vertexData: FFIPointer,
+		vertexCount: int
+	) -> bool,
 
 	-- Texture system
 	-- glTexture: pointer to KineGLTextureInfo { id, width, height, mipmaps, format }
@@ -136,6 +152,30 @@ export type Fns = {
 		receiveShadow: bool,
 		culling: bool,
 		tex: FFIPointer?
+	) -> (),
+	Kine_Filament_DrawMeshList: (ctx: FFIPointer, items: FFIPointer, itemCount: uint) -> (),
+	Kine_Filament_DrawMeshListVersioned: (
+		ctx: FFIPointer,
+		items: FFIPointer,
+		itemCount: uint,
+		streamId: number,
+		version: number
+	) -> (),
+	Kine_Filament_DrawMeshOutline: (
+		ctx: FFIPointer,
+		mesh: FFIPointer,
+		r: float,
+		g: float,
+		b: float,
+		thickness: float,
+		mat4: FFIPointer
+	) -> (),
+	Kine_Filament_DrawGizmo: (
+		ctx: FFIPointer,
+		gizmo: FFIPointer,
+		mat4: FFIPointer,
+		hoveredAxis: int,
+		selectedAxis: int
 	) -> (),
 
 	-- Point light management. Returns an opaque int light ID, or -1 on failure.
@@ -199,6 +239,22 @@ local funcs = {
 		returns = ffi.types.pointer,
 		args = { ffi.types.i32, ffi.types.i32 },
 	},
+	Kine_Filament_CreateForSDLWindow = {
+		returns = ffi.types.pointer,
+		args = { ffi.types.pointer, ffi.types.i32, ffi.types.i32 },
+	},
+	Kine_Filament_CreateForVulkanCompositor = {
+		returns = ffi.types.pointer,
+		args = { ffi.types.pointer, ffi.types.i32, ffi.types.i32 },
+	},
+	Kine_Filament_CreateForVulkanCompositorWindow = {
+		returns = ffi.types.pointer,
+		args = { ffi.types.pointer, ffi.types.i32, ffi.types.i32 },
+	},
+	Kine_Filament_GetVulkanCompositor = {
+		returns = ffi.types.pointer,
+		args = { ffi.types.pointer },
+	},
 	Kine_Filament_Destroy = {
 		returns = ffi.types.void,
 		args = { ffi.types.pointer },
@@ -210,6 +266,10 @@ local funcs = {
 	Kine_Filament_Resize = {
 		returns = ffi.types.void,
 		args = { ffi.types.pointer, ffi.types.i32, ffi.types.i32 },
+	},
+	Kine_Filament_SetViewport = {
+		returns = ffi.types.void,
+		args = { ffi.types.pointer, ffi.types.i32, ffi.types.i32, ffi.types.i32, ffi.types.i32 },
 	},
 	Kine_Filament_ReadPixels = {
 		returns = ffi.types.void,
@@ -248,6 +308,10 @@ local funcs = {
 	Kine_Filament_GetColorTextureId = {
 		returns = ffi.types.u32,
 		args = { ffi.types.pointer },
+	},
+	Kine_Filament_GetVulkanBackend = {
+		returns = ffi.types.u8,
+		args = { ffi.types.pointer, ffi.types.pointer },
 	},
 	Kine_Filament_DebugPrintPixel = {
 		returns = ffi.types.void,
@@ -342,7 +406,19 @@ local funcs = {
 		returns = ffi.types.pointer,
 		args = { ffi.types.pointer, ffi.types.i32 },
 	},
+	Kine_Filament_CreateMeshFromPath = {
+		returns = ffi.types.pointer,
+		args = { ffi.types.pointer, ffi.types.i8 },
+	},
 	Kine_Filament_DestroyMesh = {
+		returns = ffi.types.void,
+		args = { ffi.types.pointer, ffi.types.pointer },
+	},
+	Kine_Filament_CreateGizmo = {
+		returns = ffi.types.pointer,
+		args = { ffi.types.pointer, ffi.types.i32 },
+	},
+	Kine_Filament_DestroyGizmo = {
 		returns = ffi.types.void,
 		args = { ffi.types.pointer, ffi.types.pointer },
 	},
@@ -355,6 +431,15 @@ local funcs = {
 			ffi.types.i32, -- vertexCount
 			ffi.types.pointer, -- indices (uint16_t*)
 			ffi.types.i32, -- indexCount
+		},
+	},
+	Kine_Filament_UpdateCustomMesh = {
+		returns = ffi.types.u8,
+		args = {
+			ffi.types.pointer, -- ctx
+			ffi.types.pointer, -- mesh
+			ffi.types.pointer, -- vertexData
+			ffi.types.i32, -- vertexCount
 		},
 	},
 
@@ -387,6 +472,46 @@ local funcs = {
 			ffi.types.u8, -- receiveShadows
 			ffi.types.u8, -- culling
 			ffi.types.pointer, -- tex (optional KineFilamentTex*)
+		},
+	},
+	Kine_Filament_DrawMeshList = {
+		returns = ffi.types.void,
+		args = {
+			ffi.types.pointer, -- ctx
+			ffi.types.pointer, -- KineFilamentDrawItem[]
+			ffi.types.u32, -- itemCount
+		},
+	},
+	Kine_Filament_DrawMeshListVersioned = {
+		returns = ffi.types.void,
+		args = {
+			ffi.types.pointer, -- ctx
+			ffi.types.pointer, -- KineFilamentDrawItem[] or null when unchanged
+			ffi.types.u32, -- itemCount
+			ffi.types.u64, -- streamId
+			ffi.types.u64, -- version
+		},
+	},
+	Kine_Filament_DrawMeshOutline = {
+		returns = ffi.types.void,
+		args = {
+			ffi.types.pointer, -- ctx
+			ffi.types.pointer, -- mesh
+			ffi.types.float, -- r
+			ffi.types.float, -- g
+			ffi.types.float, -- b
+			ffi.types.float, -- thickness
+			ffi.types.pointer, -- mat4 float[16]
+		},
+	},
+	Kine_Filament_DrawGizmo = {
+		returns = ffi.types.void,
+		args = {
+			ffi.types.pointer, -- ctx
+			ffi.types.pointer, -- gizmo
+			ffi.types.pointer, -- mat4 float[16]
+			ffi.types.i32, -- hoveredAxis
+			ffi.types.i32, -- selectedAxis
 		},
 	},
 

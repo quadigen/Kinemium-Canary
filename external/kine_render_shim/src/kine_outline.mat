@@ -1,0 +1,30 @@
+material {
+    name : "kine_outline",
+    shadingModel : lit,
+    culling : front,
+    depthWrite : true,
+    depthCulling : true,
+    vertexDomain : object,
+    parameters : [
+        { type : float3, name : baseColor },
+        { type : float,  name : thickness }
+    ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        material.worldPosition.xyz += normalize(material.worldNormal) * materialParams.thickness;
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor.rgb = materialParams.baseColor;
+        material.baseColor.a = 1.0;
+        material.emissive.rgb = materialParams.baseColor;
+        material.emissive.a = 1.0;
+        material.roughness = 1.0;
+        material.metallic = 0.0;
+    }
+}

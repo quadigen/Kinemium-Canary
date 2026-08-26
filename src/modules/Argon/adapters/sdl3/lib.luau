@@ -3,6 +3,7 @@ local sdl = require("./sdl")
 local typedefs = require("../../typedefs")
 local ui = require("./skialib")
 local filament = require("./filamentlib")
+local vulkan_compositor = require("./vulkan_compositor")
 local sdl_image = require("./sdl_image")
 local zembed = require("@zembed")
 local SDLAdapter = {}
@@ -46,6 +47,7 @@ local mouseDeltaX = 0
 local mouseDeltaY = 0
 local mouseWheel = 0
 local cursorLocked = false
+local imageCache = {}
 
 SDLAdapter.Key = {
 	A = 4,
@@ -167,7 +169,7 @@ function SDLAdapter:InitWindow(params: typedefs.WindowParams): typedefs.Window
 		vulkan = 0x0000000010000000,
 	}
 
-	local flags = bit32.bor(graphics[params.WGI], SDL_WINDOW_RESIZABLE)
+	local flags = (graphics[params.WGI] or graphics.opengl) + SDL_WINDOW_RESIZABLE
 
 	local sdl_window = sdl.lib.SDL_CreateWindow(params.Title, params.Width, params.Height, flags)
 	if sdl_window == zune.ffi.null then
@@ -176,12 +178,14 @@ function SDLAdapter:InitWindow(params: typedefs.WindowParams): typedefs.Window
 		return
 	end
 	if sdl_window then
+		local uiHandle = ui:Init(params.Width, params.Height)
 		local object = {
 			Width = params.Width,
 			Height = params.Height,
 			WGI = params.WGI,
 			_handle = sdl_window,
-			_uihandle = ui:Init(params.Width, params.Height),
+			_uihandle = uiHandle,
+			_rasterUIHandle = uiHandle,
 		}
 		return object
 	end
@@ -193,6 +197,75 @@ function SDLAdapter:Init3D(window: typedefs.Window)
 		return
 	end
 	filament:Init(window)
+	if window.WGI == "vulkan" and window._3dhandle and window._3dhandle ~= zune.ffi.null then
+		local compositor = filament:GetVulkanCompositor(window)
+		if compositor then
+			window._vulkanCompositor = compositor
+			window._vulkanCompositorOwnedByFilament = true
+			window._vulkanCompositorCreationFailedFor = nil
+			window._vulkanCompositorError = nil
+			window._vulkanCompositorSkiaContext = vulkan_compositor.lib.Kine_VulkanCompositor_GetSkiaContext(compositor)
+			return
+		end
+
+		local backend = zune.ffi.alloc(64)
+		if filament:GetVulkanBackend(window, backend) then
+			local skiaVulkanContext = ui:CreateVulkanContext(backend)
+			if skiaVulkanContext and skiaVulkanContext ~= zune.ffi.null then
+				window._skiaVulkanContext = skiaVulkanContext
+			else
+				print("Skia Vulkan context creation failed.")
+			end
+		else
+			print("Filament Vulkan backend export failed.")
+		end
+		zune.ffi.free(backend)
+	end
+end
+
+function SDLAdapter:InitVulkanCompositor(window: typedefs.Window)
+	if not window_real(window) then
+		return false
+	end
+	if window._vulkanCompositor then
+		return true
+	end
+
+	local creationKey = tostring(window.Width) .. "x" .. tostring(window.Height)
+	if window._vulkanCompositorCreationFailedFor == creationKey then
+		return false
+	end
+
+	local handle =
+		vulkan_compositor.lib.Kine_VulkanCompositor_CreateForSDLWindow(window._handle, window.Width, window.Height)
+	if not handle or handle == zune.ffi.null then
+		window._vulkanCompositorCreationFailedFor = creationKey
+		return false
+	end
+
+	window._vulkanCompositor = handle
+	if vulkan_compositor.lib.Kine_VulkanCompositor_IsReady(handle) == 0 then
+		local errorPtr = vulkan_compositor.lib.Kine_VulkanCompositor_GetLastError(handle)
+		if errorPtr and errorPtr ~= zune.ffi.null then
+			window._vulkanCompositorError = readCString(errorPtr, 512)
+			print("Vulkan compositor creation failed: " .. window._vulkanCompositorError)
+		else
+			window._vulkanCompositorError = "unknown Vulkan compositor error"
+			print("Vulkan compositor creation failed.")
+		end
+		vulkan_compositor.lib.Kine_VulkanCompositor_Destroy(handle)
+		window._vulkanCompositor = nil
+		window._vulkanCompositorSkiaContext = nil
+		window._vulkanCompositorFrameSurface = nil
+		window._vulkanCompositorFrameActive = false
+		window._vulkanCompositorCreationFailedFor = creationKey
+		return false
+	end
+
+	window._vulkanCompositorCreationFailedFor = nil
+	window._vulkanCompositorError = nil
+	window._vulkanCompositorSkiaContext = vulkan_compositor.lib.Kine_VulkanCompositor_GetSkiaContext(handle)
+	return true
 end
 
 function SDLAdapter:GetSystemTheme(): "unknown" | "light" | "dark"
@@ -225,8 +298,12 @@ function SDLAdapter:CreateRenderingContext(window: typedefs.Window): typedefs.Re
 			return false
 		end
 	elseif window.WGI == "vulkan" then
-		print("Vulkan Rendering Context is in development, Check back later!")
-		return false
+		local struct = {
+			_handle = nil,
+			Window = window,
+		}
+		window._context = struct
+		return struct
 	end
 	return false
 end
@@ -286,6 +363,11 @@ end
 
 function SDLAdapter:CreateImageFromPath(path: string)
 	path = zembed.AssetPath(path)
+	local cached = imageCache[path]
+	if cached then
+		return cached
+	end
+
 	local surface = sdl_image.lib.IMG_Load(path) :: SDL_Surface
 	local skia_image = ui:CreateImage(path)
 
@@ -301,11 +383,36 @@ function SDLAdapter:CreateImageFromPath(path: string)
 		new.pitch = details.pitch
 	end
 
+	imageCache[path] = new
 	return new
 end
 
 function SDLAdapter:CreateMesh(window: typedefs.Window, meshType: string)
 	return filament:CreateMesh(window, meshType)
+end
+
+function SDLAdapter:CreateMeshFromPath(window: typedefs.Window, path: string)
+	return filament:CreateMeshFromPath(window, zembed.AssetPath(path))
+end
+
+function SDLAdapter:CreateCustomMesh(window: typedefs.Window, vertexData, vertexCount, indices, indexCount)
+	return filament:CreateCustomMesh(window, vertexData, vertexCount, indices, indexCount)
+end
+
+function SDLAdapter:DestroyMesh(window: typedefs.Window, mesh: typedefs.Mesh?)
+	return filament:DestroyMesh(window, mesh)
+end
+
+function SDLAdapter:UpdateCustomMesh(window: typedefs.Window, mesh: typedefs.Mesh?, vertexData, vertexCount: number)
+	return filament:UpdateCustomMesh(window, mesh, vertexData, vertexCount)
+end
+
+function SDLAdapter:CreateGizmo(window: typedefs.Window, gizmoType: string)
+	return filament:CreateGizmo(window, gizmoType)
+end
+
+function SDLAdapter:DestroyGizmo(window: typedefs.Window, gizmo: typedefs.Gizmo?)
+	return filament:DestroyGizmo(window, gizmo)
 end
 
 function SDLAdapter:CreateDecalTexture(window: typedefs.Window, path: string)
@@ -371,18 +478,77 @@ function SDLAdapter:ShowWindow(window: typedefs.Window)
 end
 
 function SDLAdapter:BeginFrame(context: typedefs.RenderingContext)
+	if context.Window.WGI == "vulkan" then
+		context.Window._vulkanCompositorFrameActive = false
+		local filamentCompositor = filament:GetVulkanCompositor(context.Window)
+		if filamentCompositor then
+			context.Window._vulkanCompositor = filamentCompositor
+			context.Window._vulkanCompositorOwnedByFilament = true
+		end
+		if not context.Window._vulkanCompositor then
+			self:InitVulkanCompositor(context.Window)
+		end
+		if context.Window._vulkanCompositor then
+			local surface = vulkan_compositor.lib.Kine_VulkanCompositor_BeginFrame(context.Window._vulkanCompositor)
+			if surface and surface ~= zune.ffi.null then
+				context.Window._vulkanCompositorFrameSurface = surface
+				context.Window._uihandle = surface
+				context.Window._vulkanCompositorFrameActive = true
+				context.Window._vulkanBeginFrameErrorLogged = nil
+				context.Window._vulkanEndFrameErrorLogged = nil
+			elseif not context.Window._vulkanBeginFrameErrorLogged then
+				local errorPtr =
+					vulkan_compositor.lib.Kine_VulkanCompositor_GetLastError(context.Window._vulkanCompositor)
+				if errorPtr and errorPtr ~= zune.ffi.null then
+					print("Vulkan compositor BeginFrame failed: " .. readCString(errorPtr, 512))
+				else
+					print("Vulkan compositor BeginFrame failed.")
+				end
+				context.Window._vulkanBeginFrameErrorLogged = true
+			end
+		end
+		return
+	end
 	sdl.lib.SDL_GL_MakeCurrent(context.Window._handle, context._handle)
 end
 
 function SDLAdapter:ReleaseGLContext(context: typedefs.RenderingContext)
+	if context.Window.WGI == "vulkan" then
+		return
+	end
 	sdl.lib.SDL_GL_MakeCurrent(context.Window._handle, nil)
 end
 
 function SDLAdapter:EndFrame(context: typedefs.RenderingContext)
+	if context.Window.WGI == "vulkan" then
+		if context.Window._vulkanCompositor and context.Window._vulkanCompositorFrameActive then
+			local endFrameResult =
+				vulkan_compositor.lib.Kine_VulkanCompositor_EndFrame(context.Window._vulkanCompositor)
+			if endFrameResult == 0 then
+				if not context.Window._vulkanEndFrameErrorLogged then
+					local errorPtr =
+						vulkan_compositor.lib.Kine_VulkanCompositor_GetLastError(context.Window._vulkanCompositor)
+					if errorPtr and errorPtr ~= zune.ffi.null then
+						print("Vulkan compositor EndFrame failed: " .. readCString(errorPtr, 512))
+					else
+						print("Vulkan compositor EndFrame failed.")
+					end
+					context.Window._vulkanEndFrameErrorLogged = true
+				end
+			end
+		end
+		context.Window._vulkanCompositorFrameActive = false
+		context.Window._vulkanCompositorFrameSurface = nil
+		context.Window._uihandle = context.Window._rasterUIHandle
+		return
+	end
 	sdl.lib.SDL_GL_SwapWindow(context.Window._handle)
 end
 
 function SDLAdapter:RenderClear(renderer: typedefs.Renderer)
+	if not renderer or not renderer._handle then
+		return
+	end
 	sdl.lib.SDL_SetRenderDrawColor(renderer._handle, 0, 0, 0, 0)
 	sdl.lib.SDL_RenderClear(renderer._handle)
 end
@@ -394,8 +560,15 @@ function SDLAdapter:GetWindowPixelSize(window: typedefs.Window): (number?, numbe
 
 	local widthPtr = zune.ffi.alloc(4)
 	local heightPtr = zune.ffi.alloc(4)
-	sdl.lib.SDL_GetWindowSizeInPixels(window._handle, widthPtr, heightPtr)
-	return widthPtr:readi32(0), heightPtr:readi32(0)
+	local succeeded = sdl.lib.SDL_GetWindowSizeInPixels(window._handle, widthPtr, heightPtr)
+	local width = widthPtr:readi32(0)
+	local height = heightPtr:readi32(0)
+	zune.ffi.free(widthPtr)
+	zune.ffi.free(heightPtr)
+	if not succeeded or succeeded == 0 then
+		return nil, nil
+	end
+	return width, height
 end
 
 function SDLAdapter:GetDPIScale(window: typedefs.Window)
@@ -409,6 +582,14 @@ function SDLAdapter:CreateRenderer(window: typedefs.Window): typedefs.Renderer
 	if not window_real(window) then
 		return
 	end
+	if window.WGI == "vulkan" then
+		local renderer = {
+			_handle = nil,
+			_vulkanNative = true,
+		}
+		window._rendererhandle = nil
+		return renderer
+	end
 
 	local renderer = {
 		_handle = sdl.lib.SDL_CreateRenderer(window._handle, 0),
@@ -418,6 +599,14 @@ function SDLAdapter:CreateRenderer(window: typedefs.Window): typedefs.Renderer
 end
 
 function SDLAdapter:CreateTexture(params: typedefs.TextureParams): typedefs.Texture
+	if not params.renderer or not params.renderer._handle then
+		return {
+			_handle = nil,
+			width = params.width,
+			height = params.height,
+		}
+	end
+
 	local PixelFormat = {
 		UNKNOWN = 0,
 
@@ -481,6 +670,9 @@ function SDLAdapter:CreateTexture(params: typedefs.TextureParams): typedefs.Text
 end
 
 function SDLAdapter:DrawTexture(renderer: typedefs.Renderer, texture: typedefs.Texture, dstRect: any?)
+	if not renderer or not renderer._handle or not texture or not texture._handle then
+		return
+	end
 	if dstRect then
 		local rectPtr = zune.ffi.alloc(16)
 		rectPtr:writef32(0, dstRect.X)
@@ -660,6 +852,16 @@ function SDLAdapter:PollEvents(window: typedefs.Window, callback)
 		end
 	end
 
+	-- SDL can emit logical and pixel resize events for the same change. Vulkan
+	-- swapchains use physical pixels, so collapse both to the current pixel size.
+	if resized and window.WGI == "vulkan" then
+		local pixelWidth, pixelHeight = self:GetWindowPixelSize(window)
+		if pixelWidth and pixelHeight then
+			newWidth = pixelWidth
+			newHeight = pixelHeight
+		end
+	end
+
 	local keyboardState = sdl.lib.SDL_GetKeyboardState(zune.ffi.null)
 	if keyboardState then
 		for _, key in pairs(SDLAdapter.Key) do
@@ -672,6 +874,9 @@ end
 
 -- ui lib
 function SDLAdapter:UpdateSkiaTexture(texture: typedefs.Texture, window: typedefs.Window)
+	if not texture or not texture._handle then
+		return
+	end
 	local pixels, pitch = ui:GetPixelsAndPitch(window._uihandle)
 	if not pixels or not pitch then
 		return
@@ -747,6 +952,12 @@ function SDLAdapter:DrawText(window: typedefs.Window, text: string, args: typede
 end
 
 function SDLAdapter:UpdateTexture(texture: typedefs.Texture, pixels, pitch)
+	if not texture or not texture._handle then
+		return
+	end
+	if not pixels or not pitch then
+		return
+	end
 	sdl.lib.SDL_UpdateTexture(texture._handle, nil, pixels, pitch)
 end
 
@@ -769,10 +980,33 @@ function SDLAdapter:Shutdown(window: typedefs.Window, renderer: typedefs.Rendere
 	if not window_real(window) then
 		return
 	end
-	if renderer then
+	if window._vulkanCompositor and not window._vulkanCompositorOwnedByFilament then
+		vulkan_compositor.lib.Kine_VulkanCompositor_Destroy(window._vulkanCompositor)
+		window._vulkanCompositor = nil
+		window._vulkanCompositorSkiaContext = nil
+		window._vulkanCompositorError = nil
+		window._vulkanCompositorCreationFailedFor = nil
+	end
+	window._vulkanCompositor = nil
+	window._vulkanCompositorOwnedByFilament = nil
+	if window._skiaVulkanContext then
+		ui:DestroyVulkanContext(window._skiaVulkanContext)
+		window._skiaVulkanContext = nil
+	end
+	for _, image in pairs(imageCache) do
+		if image._handle and image._handle ~= zune.ffi.null then
+			ui:DestroyImage(image._handle)
+		end
+		if image._surface and image._surface ~= zune.ffi.null then
+			sdl.lib.SDL_DestroySurface(image._surface)
+		end
+	end
+	table.clear(imageCache)
+	filament:Shutdown(window)
+	if renderer and renderer._handle then
 		sdl.lib.SDL_DestroyRenderer(renderer._handle)
 	end
-	if context then
+	if context and context._handle then
 		sdl.lib.SDL_GL_DestroyContext(context._handle)
 	end
 	if window then
@@ -790,6 +1024,13 @@ function SDLAdapter:Render3D(window: typedefs.Window, dt: number)
 		return
 	end
 	filament:Render3D(window, dt)
+	if window.WGI == "vulkan" and window._vulkanCompositor then
+		local surface = vulkan_compositor.lib.Kine_VulkanCompositor_GetCurrentSkiaSurface(window._vulkanCompositor)
+		if surface and surface ~= zune.ffi.null then
+			window._vulkanCompositorFrameSurface = surface
+			window._uihandle = surface
+		end
+	end
 end
 
 function SDLAdapter:Resize3D(window: typedefs.Window, width: number, height: number)
@@ -797,6 +1038,15 @@ function SDLAdapter:Resize3D(window: typedefs.Window, width: number, height: num
 		return
 	end
 	filament:Resize3D(window, width, height)
+end
+
+function SDLAdapter:Set3DViewport(window: typedefs.Window, x: number?, y: number?, width: number?, height: number?)
+	if not window_real(window) then
+		return
+	end
+	if window.WGI == "vulkan" then
+		filament:SetViewport(window, x, y, width, height)
+	end
 end
 
 function SDLAdapter:RGBA(r, g, b, a: number?): typedefs.RGBA
@@ -809,6 +1059,10 @@ function SDLAdapter:RGBA(r, g, b, a: number?): typedefs.RGBA
 end
 
 function SDLAdapter:DrawTextureFlipped(renderer: typedefs.Renderer, texture: typedefs.Texture, dstRect: any?)
+	if not renderer or not renderer._handle or not texture or not texture._handle then
+		return
+	end
+
 	local dstPtr = nil
 	if dstRect then
 		dstPtr = zune.ffi.alloc(16)
@@ -882,12 +1136,18 @@ end
 
 -- frame
 function SDLAdapter:RenderPresent(renderer: typedefs.Renderer)
+	if not renderer or not renderer._handle then
+		return
+	end
 	sdl.lib.SDL_SetRenderDrawColor(renderer._handle, 0, 0, 0, 255)
 	sdl.lib.SDL_RenderPresent(renderer._handle)
 end
 
 -- i genuinely dont want to write this but
 SDLAdapter.DrawMesh = filament.DrawMesh
+SDLAdapter.DrawMeshList = filament.DrawMeshList
+SDLAdapter.DrawMeshOutline = filament.DrawMeshOutline
+SDLAdapter.DrawGizmo = filament.DrawGizmo
 SDLAdapter.SetSkyAtmosphere = filament.SetSkyAtmosphere
 SDLAdapter.SetCameraLookAt = filament.SetCameraLookAt
 SDLAdapter.CreateDecal = filament.CreateDecal
