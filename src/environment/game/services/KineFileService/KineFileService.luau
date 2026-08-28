@@ -6,7 +6,6 @@ KineFileService.ExplorerHidden = true
 KineFileService._Intents = Enum.PluginIntents.Filesystem
 
 local kine = require("./src/environment/game/services/KineFileService/filetypes/kine")
-local scene = require("./src/environment/game/services/KineFileService/filetypes/scene")
 
 local zembed = require("@zembed")
 local fs = zune.fs
@@ -37,9 +36,26 @@ local defaultFlags = {
 	},
 }
 
-local function buildEngine()
-	local res = process.run(zune_path or fs.getExePath(), { "run", "build" })
+local EMBEDDED_GAME_PATH = "./.temp/embedded-game.kine"
+local EMBEDDED_GAME_MODULE_PATH = "./.temp/embedded-game-data.luau"
+
+local function buildEngine(embeddedGamePath: string?)
+	local args = { "run", "build" }
+	if embeddedGamePath then
+		table.insert(args, "--embed-game")
+		table.insert(args, embeddedGamePath)
+	end
+
+	local res = process.run(zune_path or fs.getExePath(), args)
 	return res
+end
+
+local function restoreAssetProperties(oldProperties)
+	for object, properties in pairs(oldProperties or {}) do
+		for property, value in pairs(properties) do
+			object[property] = value
+		end
+	end
 end
 
 local function loop(path)
@@ -146,7 +162,7 @@ KineFileService.InitRenderer = function(renderer, renderer_signal, datamodel)
 				end
 
 				local children = service:GetChildren()
-				if children[1] ~= nil then
+				if service.Name == "Workspace" or children[1] ~= nil then
 					table.insert(saved, service)
 				else
 					print("Skipped " .. service.Name)
@@ -178,42 +194,48 @@ KineFileService.InitRenderer = function(renderer, renderer_signal, datamodel)
 
 		ExportGameAsExecutable = function(gameName)
 			local assets, old_props = assetsaver:GetGameAssets(datamodel)
-
-			local res = buildEngine()
-			if not res.ok then
-				error(`Got error code {res.code} while building Engine`)
-				return
-			end
-
-			local platform = buildNames[zune.platform.os]
-			local buildFolder = `./build/{platform}`
-			local exportedFolder = buildFolder .. "/exported"
-			local game_folder_assets = buildFolder .. "/assets/game"
-
-			fs.makeDir(exportedFolder)
-
-			-- write engine flags file, this will determine what flags the engine is gonna
-			-- startup with
-			fs.writeFile(exportedFolder .. "/flags.toml", serde.toml.encode(defaultFlags))
-
-			-- get assets
-
-			if assets then
-				fs.makeDir(game_folder_assets)
-
-				for path, buff in pairs(assets) do
-					-- write
-					local basename = zune.fs.path.basename(path)
-					fs.writeFile(game_folder_assets .. "/" .. basename, buff)
+			local success, result = pcall(function()
+				fs.makeDir("./.temp", true)
+				pcall(fs.deleteFile, EMBEDDED_GAME_PATH)
+				pcall(fs.deleteFile, EMBEDDED_GAME_MODULE_PATH)
+				local serialized = KineFileService.ExportGameAsFile("./.temp", "embedded-game")
+				if not serialized then
+					error(`Failed to serialize {tostring(gameName)} for executable export`)
 				end
-			end
 
-			KineFileService.ExportGameAsFile(exportedFolder, "obj")
-
-			for object, props in pairs(old_props) do
-				for property, value in pairs(props) do
-					object[property] = value
+				local res = buildEngine(EMBEDDED_GAME_PATH)
+				pcall(fs.deleteFile, EMBEDDED_GAME_PATH)
+				if not res.ok then
+					error(`Got error code {res.code} while building Engine: {tostring(res.stderr)}`)
 				end
+
+				local platform = buildNames[zune.platform.os]
+				local buildFolder = `./build/{platform}`
+				local exportedFolder = buildFolder .. "/exported"
+				local game_folder_assets = buildFolder .. "/assets/game"
+
+				fs.makeDir(exportedFolder, true)
+
+				-- Runtime flags and game assets remain beside the executable. The datamodel
+				-- itself is bundled into the executable by build.luau.
+				fs.writeFile(exportedFolder .. "/flags.toml", serde.toml.encode(defaultFlags))
+
+				if assets then
+					fs.makeDir(game_folder_assets, true)
+
+					for path, buff in pairs(assets) do
+						local basename = zune.fs.path.basename(path)
+						fs.writeFile(game_folder_assets .. "/" .. basename, buff)
+					end
+				end
+			end)
+
+			restoreAssetProperties(old_props)
+			pcall(fs.deleteFile, EMBEDDED_GAME_PATH)
+			pcall(fs.deleteFile, EMBEDDED_GAME_MODULE_PATH)
+
+			if not success then
+				error(result)
 			end
 
 			return true

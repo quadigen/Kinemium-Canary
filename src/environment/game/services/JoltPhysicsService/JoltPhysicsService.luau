@@ -223,6 +223,10 @@ local function getMotionTypeForPart(part)
 	return 0
 end
 
+local function shouldHavePhysicsBody(part)
+	return not (part.Anchored == true and part.CanCollide == false and part.IsKinematic ~= true)
+end
+
 local function getMeshPartGeometry(part)
 	local mesh = part.MeshObject
 	if not mesh or (mesh.ClassName ~= "EditableMesh" and mesh.class ~= "EditableMesh") then
@@ -842,6 +846,11 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 
 		local debugBodiesCreated = 0
 		local function CreateBodyForPart(part)
+			if not shouldHavePhysicsBody(part) then
+				RemoveBody(part)
+				return
+			end
+
 			if not part.CFrame then
 				return
 			end
@@ -991,9 +1000,6 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 				end
 
 				lib.JPH_BodyInterface_ActivateBody(bodyInterface, bodyID)
-
-				local jForce = structs.JPH_Vec3:new({ x = force.X, y = force.Y, z = force.Z })
-				local jPoint = RVec3(applicationPoint.X, applicationPoint.Y, applicationPoint.Z)
 
 				lib.JPH_BodyInterface_ActivateBody(bodyInterface, bodyID)
 				local f = structs.JPH_Vec3:new({ x = force.X, y = force.Y, z = force.Z })
@@ -2207,6 +2213,10 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 		propTable.HandleRendererSignal = function(route, data)
 			if route == "UpdatePart" or route == "AddedPartToRenderPool" then
 				if not data.Parent or not data:IsDescendantOf(game.Workspace) then
+					RemoveBody(data)
+					return
+				end
+				if not shouldHavePhysicsBody(data) then
 					RemoveBody(data)
 					return
 				end

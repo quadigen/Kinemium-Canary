@@ -85,6 +85,17 @@ local JPH_BoxShape_Create = { returns = ptr, args = { ptr, f32 } }
 -- JPH_ShapeRef JPH_SphereShape_Create(float radius)
 local JPH_SphereShape_Create = { returns = ptr, args = { f32 } }
 
+-- JPH_ShapeRef JPH_ConvexHullShape_Create(
+--   const JPH_Vec3* points, uint32_t pointCount, float maxConvexRadius)
+local JPH_ConvexHullShape_Create = { returns = ptr, args = { ptr, u32, f32 } }
+
+-- JPH_ShapeRef JPH_MeshShape_Create(
+--   const JPH_Triangle* triangles, uint32_t triangleCount)
+local JPH_MeshShape_Create = { returns = ptr, args = { ptr, u32 } }
+
+-- void JPH_Shape_Destroy(JPH_ShapeRef shape)
+local JPH_Shape_Destroy = { returns = void, args = { ptr } }
+
 -- ─── Body creation settings ───────────────────────────────────────────────────
 
 -- JPH_BodyCreationSettingsRef JPH_BodyCreationSettings_Create3(
@@ -326,6 +337,9 @@ return {
 	-- Shapes
 	JPH_BoxShape_Create = JPH_BoxShape_Create,
 	JPH_SphereShape_Create = JPH_SphereShape_Create,
+	JPH_ConvexHullShape_Create = JPH_ConvexHullShape_Create,
+	JPH_MeshShape_Create = JPH_MeshShape_Create,
+	JPH_Shape_Destroy = JPH_Shape_Destroy,
 
 	-- Body creation settings
 	JPH_BodyCreationSettings_Create3 = JPH_BodyCreationSettings_Create3,

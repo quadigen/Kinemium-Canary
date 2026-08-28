@@ -17,40 +17,7 @@ return {
 	class = "SSGIEffect",
 
 	callback = function(instance)
-		local r3d = require("@r3d")
-
 		instance:SetProperties(propTable)
-
-		local envssgi = r3d.structs.R3D_EnvSSGI:new({
-			sampleCount = instance.SampleCount,
-			maxRaySteps = instance.MaxRaySteps,
-			stepSize = instance.StepSize,
-			thickness = instance.Thickness,
-			maxDistance = instance.MaxDistance,
-			fadeStart = instance.FadeStart,
-			fadeEnd = instance.FadeEnd,
-			denoiseSteps = instance.DenoiseSteps,
-			enabled = instance.Enabled and 1 or 0,
-		})
-		instance:SetMetadata("EffectObject", envssgi)
-
-		instance.Changed:Connect(function(property, value)
-			if property == "_r3deffect" then
-				return
-			end
-			envssgi = r3d.structs.R3D_EnvSSGI:new({
-				sampleCount = instance.SampleCount,
-				maxRaySteps = instance.MaxRaySteps,
-				stepSize = instance.StepSize,
-				thickness = instance.Thickness,
-				maxDistance = instance.MaxDistance,
-				fadeStart = instance.FadeStart,
-				fadeEnd = instance.FadeEnd,
-				denoiseSteps = instance.DenoiseSteps,
-				enabled = instance.Enabled and 1 or 0,
-			})
-			instance:SetMetadata("EffectObject", envssgi)
-		end)
 
 		return instance
 	end,

@@ -53,6 +53,11 @@ StudioThemeService.InitRenderer = function(renderer, renderer_signal, datamodel)
 				Size = UDim2.new(0.22, -P * 1.5, 0.5, -(P / 2 + P + BottomPad)),
 				Position = UDim2.new(0.78, P / 2, 0.5, P / 2),
 			},
+
+			CodeEditorCoordinates = {
+				Size = UDim2.new(0.78, -P * 1.5, viewportHeight, viewportHeightOffset),
+				Position = UDim2.new(0, P, 0, viewportTop),
+			},
 		}
 	end
 
@@ -76,7 +81,7 @@ StudioThemeService.InitRenderer = function(renderer, renderer_signal, datamodel)
 		OutputCoordinates = Coordinates.OutputCoordinates,
 		ExplorerCoordinates = Coordinates.ExplorerCoordinates,
 		InspectorCoordinates = Coordinates.InspectorCoordinates,
-
+		CodeEditorCoordinates = Coordinates.CodeEditorCoordinates,
 		LayoutConfig = {
 			P = 4,
 			TopH = 33,
@@ -89,6 +94,7 @@ StudioThemeService.InitRenderer = function(renderer, renderer_signal, datamodel)
 			Right = { flexGrow = 0.22, minWidth = 0 },
 
 			Viewport = { flexGrow = 0.7, layoutOrder = 1 },
+			CodeEditor = { target = "Viewport" },
 			Output = { flexGrow = 0.3, layoutOrder = 2 },
 
 			Explorer = { flexGrow = 0.5, layoutOrder = 1 },
@@ -127,6 +133,10 @@ StudioThemeService.InitRenderer = function(renderer, renderer_signal, datamodel)
 		default.ViewportCoordinates = {
 			Size = UDim2.new(0.78, -P * 1.5, 0.7, -(2 * P + TopH + P / 2)),
 			Position = UDim2.new(0, P, 0, 2 * P + TopH),
+		}
+		default.CodeEditorCoordinates = {
+			Size = default.ViewportCoordinates.Size,
+			Position = default.ViewportCoordinates.Position,
 		}
 		default.OutputCoordinates = {
 			Size = UDim2.new(0.78, -P * 1.5, 0.3, -(P / 2 + P + BottomPad)),

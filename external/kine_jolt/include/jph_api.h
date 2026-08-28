@@ -40,6 +40,14 @@ typedef struct JPH_Quat
     float w;
 } JPH_Quat;
 
+typedef struct JPH_Triangle
+{
+    JPH_Vec3 v1;
+    JPH_Vec3 v2;
+    JPH_Vec3 v3;
+    uint32_t materialIndex;
+} JPH_Triangle;
+
 typedef void* JPH_ShapeRef;
 typedef void* JPH_BodyCreationSettingsRef;
 typedef void* JPH_BodyRef;                 // JPH::Body*
@@ -152,6 +160,13 @@ JPH_API JPH_ObjectVsBroadPhaseLayerFilterRef JPH_ObjectVsBroadPhaseLayerFilterTa
 
 JPH_API JPH_ShapeRef JPH_BoxShape_Create(const JPH_Vec3* halfExtent, float convexRadius);
 JPH_API JPH_ShapeRef JPH_SphereShape_Create(float radius);
+JPH_API JPH_ShapeRef JPH_ConvexHullShape_Create(
+    const JPH_Vec3* points,
+    uint32_t pointCount,
+    float maxConvexRadius
+);
+JPH_API JPH_ShapeRef JPH_MeshShape_Create(const JPH_Triangle* triangles, uint32_t triangleCount);
+JPH_API void JPH_Shape_Destroy(JPH_ShapeRef shape);
 
 JPH_API JPH_BodyCreationSettingsRef JPH_BodyCreationSettings_Create3(
     JPH_ShapeRef shape,

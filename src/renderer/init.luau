@@ -3,8 +3,6 @@ local KiRend = {}
 
 local signal = require("@Kinemium.signal")
 local argon = require("@Argon")
-local immco = require("@Immco")
-local Instance = require("@Instance")
 local meshgen = require("@meshgen")
 
 local mockMeshlib = {
@@ -184,7 +182,6 @@ function KiRend.new(config: KiRendConf)
 	})
 
 	local skia_tools_ctx = argon:CreateSkiaSurface(config.width, config.height)
-	local freecam = require("./renderer/freecam")
 	local activeCamera = nil
 
 	local filament_tex = argon:CreateTexture({
@@ -300,6 +297,7 @@ function KiRend.new(config: KiRendConf)
 
 		DrawFps = true,
 		ShowPerfOverlay = false,
+		UpdateCamera = true,
 		PerfStats = perf_stats,
 
 		SetDimension = function(self, dimension: "2D" | "3D")
@@ -399,6 +397,27 @@ function KiRend.new(config: KiRendConf)
 					version = version,
 				})
 				mesh_draw_lists_count += 1
+			end,
+
+			CreateInstanceBatch = function(drawCalls, count)
+				if not argon.CreateInstanceBatch then
+					return nil
+				end
+				return argon:CreateInstanceBatch(window, drawCalls, count)
+			end,
+
+			UpdateInstanceTransforms = function(batch, updates, count)
+				if not argon.UpdateInstanceTransforms then
+					return
+				end
+				argon:UpdateInstanceTransforms(window, batch, updates, count)
+			end,
+
+			DestroyInstanceBatch = function(batch)
+				if not argon.DestroyInstanceBatch then
+					return
+				end
+				argon:DestroyInstanceBatch(batch)
 			end,
 
 			DrawMeshInstanced = function(mesh, material, instances, count, begin, End, unloadAfterFrame)
@@ -502,6 +521,7 @@ function KiRend.new(config: KiRendConf)
 				renderer_pool.gui[id] = nil
 				renderer_pool.object[id] = nil
 				renderer_pool.gizmos[id] = nil
+				renderer_pool.gui_above[id] = nil
 			end,
 		},
 
@@ -650,7 +670,14 @@ function KiRend.new(config: KiRendConf)
 		local sorted3DPool = getSortedPool(renderer_pool.object)
 		perf_stats.scene_roots_3d = #sorted3DPool
 
-		freecam.Update(frameTime, activeCamera, window)
+		if activeCamera then
+			if rendererObject.UpdateCamera then
+				local updateCamera = rawget(activeCamera, "_UpdateCamera")
+				if updateCamera then
+					updateCamera(frameTime)
+				end
+			end
+		end
 
 		renderer_eventbus:Fire("Begin3D")
 
@@ -724,13 +751,7 @@ function KiRend.new(config: KiRendConf)
 				end
 				for i = 1, mesh_draw_lists_count do
 					local drawList = renderer_mesh_draw_lists[i]
-					argon:DrawMeshList(
-						window,
-						drawList.items,
-						drawList.count,
-						drawList.streamId,
-						drawList.version
-					)
+					argon:DrawMeshList(window, drawList.items, drawList.count, drawList.streamId, drawList.version)
 				end
 				for i = 1, instanced_draw_calls_count do
 					local drawCall = renderer_instanced_draw_calls[i]
@@ -931,23 +952,21 @@ function KiRend.new(config: KiRendConf)
 		end
 
 		argon:BeginFrame(context)
-		if window.WGI == "vulkan" then
-			rendererObject.AboveCanvas = window
-		end
 		argon:Clear2D(window, { R = 1, G = 0, B = 0, A = 0 })
 		argon:Clear2D(skia_tools_ctx, { R = 1, G = 0, B = 0, A = 0 })
 
 		argon:SetCameraPosition(window, { X = 5, Y = 5, Z = 5 })
 		rendererObject:Render3D()
 		rendererObject:Render2D()
-		if window.WGI == "vulkan" then
-			rendererObject:Render2DAbove()
-		end
 		local filamentStart = os.clock()
 		argon:Render3D(window, frameTime)
 		perf_stats.filament_ms = (os.clock() - filamentStart) * 1000
 		if window.WGI == "vulkan" then
 			local compositorStart = os.clock()
+			if argon:BeginOverlay(context) then
+				rendererObject.AboveCanvas = window
+				rendererObject:Render2DAbove()
+			end
 			argon:EndFrame(context)
 			perf_stats.compositor_ms = (os.clock() - compositorStart) * 1000
 		else

@@ -4,6 +4,7 @@ local propTable = {
 	FocusPoint = 10.0,
 	FocusScale = 1.0,
 	MaxBlurSize = 20.0,
+	MaxApertureDiameter = 0.02,
 	Enabled = true,
 	Name = "DOFEffect",
 	BaseClass = "LightingPreprocess",
@@ -12,31 +13,31 @@ local propTable = {
 return {
 	class = "DOFEffect",
 
-	callback = function(instance)
-		local r3d = require("@r3d")
+	callback = function(instance, renderer)
+		local Argon = require("@Argon")
 
 		instance:SetProperties(propTable)
 
-		local envdof = r3d.structs.R3D_EnvDoF:new({
-			mode = instance.Enabled and instance.Mode or 0,
-			focusPoint = instance.FocusPoint,
-			focusScale = instance.FocusScale,
-			maxBlurSize = instance.MaxBlurSize,
-		})
-		instance:SetMetadata("EffectObject", envdof)
-
-		instance.Changed:Connect(function(property, value)
-			if property == "_r3deffect" then
+		local function applyFilament()
+			if not renderer or not renderer.Window then
 				return
 			end
-			envdof = r3d.structs.R3D_EnvDoF:new({
-				mode = instance.Enabled and instance.Mode or 0,
-				focusPoint = instance.FocusPoint,
-				focusScale = instance.FocusScale,
-				maxBlurSize = instance.MaxBlurSize,
+			local active = instance.Enabled and instance.Parent ~= nil and instance.Parent:IsA("Lighting")
+			local blur = math.clamp(math.round(instance.MaxBlurSize), 0, 32)
+			Argon:SetDepthOfField(renderer.Window, active, {
+				FocusDistance = math.max(instance.FocusPoint, 0.001),
+				CocScale = math.max(instance.FocusScale, 0),
+				MaxApertureDiameter = instance.MaxApertureDiameter,
+				MaxForegroundCOC = blur,
+				MaxBackgroundCOC = blur,
 			})
-			instance:SetMetadata("EffectObject", envdof)
+		end
+
+		instance.Changed:Connect(function(property, value)
+			applyFilament()
 		end)
+		instance.AncestryChanged:Connect(applyFilament)
+		applyFilament()
 
 		return instance
 	end,

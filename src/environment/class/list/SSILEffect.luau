@@ -16,38 +16,9 @@ return {
 	class = "SSILEffect",
 
 	callback = function(instance)
-		local r3d = require("@r3d")
-
 		instance:SetProperties(propTable)
 
-		local envssil = r3d.structs.R3D_EnvSSIL:new({
-			sampleCount = instance.SampleCount,
-			sliceCount = instance.SliceCount,
-			radius = instance.Radius,
-			thickness = instance.Thickness,
-			intensity = instance.Intensity,
-			aoPower = instance.AOPower,
-			denoiseSteps = instance.DenoiseSteps,
-			enabled = instance.Enabled and 1 or 0,
-		})
-		instance:SetMetadata("EffectObject", envssil)
-
-		instance.Changed:Connect(function(property, value)
-			if property == "_r3deffect" then
-				return
-			end
-			envssil = r3d.structs.R3D_EnvSSIL:new({
-				sampleCount = instance.SampleCount,
-				sliceCount = instance.SliceCount,
-				radius = instance.Radius,
-				thickness = instance.Thickness,
-				intensity = instance.Intensity,
-				aoPower = instance.AOPower,
-				denoiseSteps = instance.DenoiseSteps,
-				enabled = instance.Enabled and 1 or 0,
-			})
-			instance:SetMetadata("EffectObject", envssil)
-		end)
+		instance.Changed:Connect(function(property, value) end)
 
 		return instance
 	end,

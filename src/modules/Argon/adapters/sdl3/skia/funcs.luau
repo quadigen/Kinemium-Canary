@@ -26,6 +26,8 @@ export type Fns = {
 	Kine_Skia_Surface_GetPixels: (surface: FFIPointer) -> FFIPointer,
 
 	Kine_Skia_Surface_Flush: (surface: FFIPointer) -> (),
+	Kine_Skia_Surface_SetBackdropFromSurface: (surface: FFIPointer, backdrop: FFIPointer) -> (),
+	Kine_Skia_Surface_ClearBackdrop: (surface: FFIPointer) -> (),
 
 	Kine_Skia_Surface_Clear: (surface: FFIPointer, r: number, g: number, b: number, a: number) -> (),
 
@@ -55,6 +57,71 @@ export type Fns = {
 		b: number,
 		a: number,
 		strokeWidth: float
+	) -> (),
+
+	Kine_Skia_Surface_DrawSquircle: (
+		surface: FFIPointer,
+		x: float,
+		y: float,
+		width: float,
+		height: float,
+		radius: float,
+		exponent: float,
+		r: number,
+		g: number,
+		b: number,
+		a: number,
+		strokeWidth: float
+	) -> (),
+
+	Kine_Skia_Surface_DrawUIShadow: (
+		surface: FFIPointer,
+		x: float,
+		y: float,
+		width: float,
+		height: float,
+		radius: float,
+		exponent: float,
+		offsetX: float,
+		offsetY: float,
+		blurSigma: float,
+		spread: float,
+		r: number,
+		g: number,
+		b: number,
+		a: number
+	) -> (),
+
+	Kine_Skia_Surface_DrawBackdropBlurRect: (
+		surface: FFIPointer,
+		x: float,
+		y: float,
+		width: float,
+		height: float,
+		radiusX: float,
+		radiusY: float,
+		blurSigma: float,
+		alpha: number,
+		tintR: number,
+		tintG: number,
+		tintB: number,
+		tintA: number
+	) -> (),
+
+	Kine_Skia_Surface_DrawBackdropBlurSquircle: (
+		surface: FFIPointer,
+		x: float,
+		y: float,
+		width: float,
+		height: float,
+		radius: float,
+		exponent: float,
+		blurSigma: float,
+		alpha: number,
+		tintR: number,
+		tintG: number,
+		tintB: number,
+		tintA: number
 	) -> (),
 
 	Kine_Skia_Surface_DrawCircle: (
@@ -131,6 +198,16 @@ export type Fns = {
 		radiusY: float
 	) -> (),
 
+	Kine_Skia_Surface_ClipSquircle: (
+		surface: FFIPointer,
+		x: float,
+		y: float,
+		width: float,
+		height: float,
+		radius: float,
+		exponent: float
+	) -> (),
+
 	Kine_Skia_Surface_DrawPolygon: (
 		surface: FFIPointer,
 		points: FFIPointer,
@@ -186,6 +263,21 @@ export type Fns = {
 		image: FFIPointer,
 		x: float,
 		y: float,
+		alpha: number
+	) -> (),
+
+	Kine_Skia_Surface_DrawImageOutlineSized: (
+		surface: FFIPointer,
+		image: FFIPointer,
+		x: float,
+		y: float,
+		width: float,
+		height: float,
+		thickness: float,
+		r: number,
+		g: number,
+		b: number,
+		a: number,
 		alpha: number
 	) -> (),
 
@@ -280,10 +372,26 @@ local funcs = {
 		},
 	},
 
+	Kine_Skia_Surface_SetBackdropFromSurface = {
+		returns = ffi.types.void,
+		args = {
+			ffi.types.pointer,
+			ffi.types.pointer,
+		},
+	},
+
+	Kine_Skia_Surface_ClearBackdrop = {
+		returns = ffi.types.void,
+		args = {
+			ffi.types.pointer,
+		},
+	},
+
 	Kine_Skia_Surface_Clear = {
 		returns = ffi.types.void,
 		args = {
 			ffi.types.pointer,
+			ffi.types.u8,
 			ffi.types.u8,
 			ffi.types.u8,
 			ffi.types.u8,
@@ -299,6 +407,7 @@ local funcs = {
 			ffi.types.float,
 			ffi.types.float,
 			ffi.types.float,
+			ffi.types.u8,
 			ffi.types.u8,
 			ffi.types.u8,
 			ffi.types.u8,
@@ -321,7 +430,86 @@ local funcs = {
 			ffi.types.u8,
 			ffi.types.u8,
 			ffi.types.u8,
+			ffi.types.u8,
 			ffi.types.float,
+		},
+	},
+
+	Kine_Skia_Surface_DrawSquircle = {
+		returns = ffi.types.void,
+		args = {
+			ffi.types.pointer,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.u8,
+			ffi.types.u8,
+			ffi.types.u8,
+			ffi.types.u8,
+			ffi.types.float,
+		},
+	},
+
+	Kine_Skia_Surface_DrawUIShadow = {
+		returns = ffi.types.void,
+		args = {
+			ffi.types.pointer,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.u8,
+			ffi.types.u8,
+			ffi.types.u8,
+			ffi.types.u8,
+			ffi.types.u8,
+		},
+	},
+
+	Kine_Skia_Surface_DrawBackdropBlurRect = {
+		returns = ffi.types.void,
+		args = {
+			ffi.types.pointer,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.u8,
+			ffi.types.u8,
+			ffi.types.u8,
+			ffi.types.u8,
+			ffi.types.u8,
+		},
+	},
+
+	Kine_Skia_Surface_DrawBackdropBlurSquircle = {
+		returns = ffi.types.void,
+		args = {
+			ffi.types.pointer,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.u8,
+			ffi.types.u8,
+			ffi.types.u8,
+			ffi.types.u8,
+			ffi.types.u8,
 		},
 	},
 
@@ -386,6 +574,19 @@ local funcs = {
 	},
 
 	Kine_Skia_Surface_ClipRoundRect = {
+		returns = ffi.types.void,
+		args = {
+			ffi.types.pointer,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+		},
+	},
+
+	Kine_Skia_Surface_ClipSquircle = {
 		returns = ffi.types.void,
 		args = {
 			ffi.types.pointer,
@@ -567,6 +768,24 @@ local funcs = {
 			ffi.types.pointer,
 			ffi.types.float,
 			ffi.types.float,
+			ffi.types.u8,
+		},
+	},
+
+	Kine_Skia_Surface_DrawImageOutlineSized = {
+		returns = ffi.types.void,
+		args = {
+			ffi.types.pointer,
+			ffi.types.pointer,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.u8,
+			ffi.types.u8,
+			ffi.types.u8,
+			ffi.types.u8,
 			ffi.types.u8,
 		},
 	},

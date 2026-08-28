@@ -1,13 +1,9 @@
 -- description: "A container that displays a scrollable area of content."
 local Color3 = require("@Color3")
 local GuiObject = require("@GuiObject")
-local adapter = require("@RaylibAdapter")
 local structs = adapter.structs
 local UDim = require("@UDim")
 local MouseCursor = require("@Kinemium.MouseCursor")
-
-local aereon = require("@Aereon")
-local arect = aereon.rect()
 
 local propTable = {
 	Name = "ScrollingFrame",

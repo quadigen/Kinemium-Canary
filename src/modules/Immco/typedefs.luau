@@ -15,6 +15,44 @@ export type Theme = {
 	CornerRadius: number,
 }
 
+export type TableCell = string | number | {
+	Text: string?,
+	Color: RGBA?,
+	Align: ("left" | "center" | "right")?,
+}
+
+export type TableParams = {
+	x: number,
+	y: number,
+	width: number,
+	engine_window: any,
+	theme: any,
+	RetainedStorage: { [string]: any },
+	id: string,
+	renderer: any,
+	Data: { { TableCell } },
+	HasHeader: boolean?,
+	ColumnWidths: { number }?,
+	ColumnAlign: { "left" | "center" | "right" }?,
+	RowHeight: number?,
+	HeaderHeight: number?,
+	MaxVisibleRows: number?,
+	CellPadding: number?,
+	TextSize: number?,
+	CornerRadius: number?,
+	ShowGridLines: boolean?,
+	StripeRows: boolean?,
+	Align: ("left" | "center" | "right")?,
+	HeaderAlign: ("left" | "center" | "right")?,
+	HeaderColor: RGBA?,
+	HeaderTextColor: RGBA?,
+	HoverColor: RGBA?,
+	StripeColor: RGBA?,
+	ScrollSpeed: number?,
+	ScrollLerpSpeed: number?,
+	OnCellClicked: ((row: number, col: number, value: any) -> ())?,
+}
+
 export type WidgetParams = {
 	engine_window: any,
 	x: number,

@@ -13,6 +13,7 @@ export type Fns = {
 	Kine_VulkanCompositor_GetSkiaContext: (compositor: FFIPointer) -> FFIPointer,
 	Kine_VulkanCompositor_GetCurrentSkiaSurface: (compositor: FFIPointer) -> FFIPointer,
 	Kine_VulkanCompositor_BeginFrame: (compositor: FFIPointer) -> FFIPointer,
+	Kine_VulkanCompositor_BeginOverlay: (compositor: FFIPointer) -> FFIPointer,
 	Kine_VulkanCompositor_EndFrame: (compositor: FFIPointer) -> int,
 }
 
@@ -46,6 +47,10 @@ local funcs = {
 		args = { ffi.types.pointer },
 	},
 	Kine_VulkanCompositor_BeginFrame = {
+		returns = ffi.types.pointer,
+		args = { ffi.types.pointer },
+	},
+	Kine_VulkanCompositor_BeginOverlay = {
 		returns = ffi.types.pointer,
 		args = { ffi.types.pointer },
 	},

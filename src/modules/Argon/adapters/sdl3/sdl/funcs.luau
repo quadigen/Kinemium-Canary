@@ -1954,7 +1954,7 @@ local funcs = {
 	SDL_GetWindowFromID = { returns = ffi.types.pointer, args = { ffi.types.pointer } },
 	SDL_GetWindowParent = { returns = ffi.types.pointer, args = { ffi.types.pointer } },
 	SDL_GetWindowProperties = { returns = ffi.types.pointer, args = { ffi.types.pointer } },
-	SDL_GetWindowFlags = { returns = ffi.types.u64, args = { ffi.types.pointer } },
+	SDL_GetWindowFlags = { returns = ffi.types.i32, args = { ffi.types.pointer } },
 	SDL_SetWindowTitle = { returns = ffi.types.pointer, args = { ffi.types.pointer, ffi.types.i8 } },
 	SDL_GetWindowTitle = { returns = ffi.types.pointer, args = { ffi.types.pointer } },
 	SDL_SetWindowIcon = { returns = ffi.types.pointer, args = { ffi.types.pointer, ffi.types.pointer } },

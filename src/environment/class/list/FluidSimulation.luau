@@ -6,7 +6,6 @@ local Color3 = require("@Color3")
 local signal = require("@Kinemium.signal")
 local meshgen = require("@meshgen")
 
-local lib = adapter.lib
 local ffi = zune.ffi
 
 -- ============================================================================

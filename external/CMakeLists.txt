@@ -34,6 +34,16 @@ add_subdirectory(kine_render_shim)
 add_subdirectory(kine_skia)
 add_subdirectory(kine_vulkan_compositor)
 
+FetchContent_Declare(
+    enet
+    GIT_REPOSITORY https://github.com/lsalzman/enet.git
+    GIT_TAG v1.3.18
+    GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(enet)
+set_target_properties(enet PROPERTIES POSITION_INDEPENDENT_CODE ON)
+add_subdirectory(kine_enet)
+
 # Manifold
 set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 set(MANIFOLD_DEBUG OFF CACHE BOOL "" FORCE)
@@ -78,6 +88,10 @@ endforeach()
 
 if(TARGET kine_vulkan_compositor)
     target_compile_definitions(kine_vulkan_compositor PRIVATE KINE_BUILD_SHARED KINE_VULKAN_COMPOSITOR_BUILD_EXPORTS)
+endif()
+
+if(TARGET kine_enet)
+    target_compile_definitions(kine_enet PRIVATE KINE_ENET_BUILD_EXPORTS)
 endif()
 
 if(TARGET box2d)
@@ -168,6 +182,7 @@ kine_link_whole_archive(KinemiumLibs kine_render_shim)
 kine_link_whole_archive(KinemiumLibs kine_filament_shim)
 kine_link_whole_archive(KinemiumLibs kine_skia)
 kine_link_whole_archive(KinemiumLibs kine_vulkan_compositor)
+kine_link_whole_archive(KinemiumLibs kine_enet)
 kine_link_whole_archive(KinemiumLibs JoltWrapper)
 kine_link_whole_archive(KinemiumLibs box2d)
 kine_link_whole_archive(KinemiumLibs nfd)

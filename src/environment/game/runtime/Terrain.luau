@@ -3,6 +3,8 @@ local Color3 = require("@Color3")
 
 local meshgen = require("@meshgen")
 local Vector3 = require("@Vector3")
+local CFrame = require("@CFrame")
+local argon = require("@argon")
 
 local EDGE_TABLE = {
 	0x0,
@@ -526,7 +528,20 @@ local Terrain = Instance.new("Terrain")
 
 local CHUNK_SIZE = 16 -- voxels per chunk axis
 local MAX_REPLICATION_VOXELS_PER_BATCH = 4096
-local UV_SCALE = 0.5 -- scale for planar UV mapping
+local TERRAIN_MATERIAL_KIND = 7
+local TERRAIN_LAYER_NAMES = { "grass", "sand", "slate", "concrete", "smoothplastic", "wood" }
+local TERRAIN_MATERIAL_LAYERS = {
+	grass = 1,
+	sand = 2,
+	dirt = 2,
+	slate = 3,
+	stone = 3,
+	concrete = 4,
+	snow = 5,
+	smoothplastic = 5,
+	water = 5,
+	wood = 6,
+}
 
 local function chunkKey(cx, cy, cz)
 	return cx .. "," .. cy .. "," .. cz
@@ -571,6 +586,23 @@ Terrain.InitRenderer = function(renderer, renderer_signal, datamodel)
 	})
 
 	local isHeadlessRuntime = IsHeadless == true
+	local terrainSceneVersion = 1
+	local terrainDrawList = {}
+	local terrainRenderStarted = false
+	local identityCFrame = CFrame.new()
+	local identityScale = Vector3.new(1, 1, 1)
+	local terrainLayerTextures = {}
+	local terrainTextureSet = nil
+
+	if not isHeadlessRuntime and renderer and renderer.Window then
+		for index, materialName in ipairs(TERRAIN_LAYER_NAMES) do
+			terrainLayerTextures[index] = argon:CreateDecalTexture(
+				renderer.Window,
+				`./src/assets/materials/compressed/{materialName}/albedo.png`
+			)
+		end
+		terrainTextureSet = argon:CreateTerrainTextureSet(renderer.Window, terrainLayerTextures)
+	end
 
 	function Terrain:_getVoxel(x, y, z)
 		local xr = Terrain._blocks[x]
@@ -607,6 +639,54 @@ Terrain.InitRenderer = function(renderer, renderer_signal, datamodel)
 			return 0, 1, 0
 		end
 		return nx / len, ny / len, nz / len
+	end
+
+	local function getMaterialLayer(material)
+		if type(material) ~= "string" then
+			return 1
+		end
+		return TERRAIN_MATERIAL_LAYERS[string.lower(material)] or 1
+	end
+
+	local function getSingleMaterialWeights(material)
+		local weights = { 0, 0, 0, 0, 0, 0, 0, 0 }
+		weights[getMaterialLayer(material)] = 1
+		return weights
+	end
+
+	function Terrain:_getMaterialWeightsAtWorld(worldX, worldY, worldZ)
+		local vs = Terrain.VoxelSize
+		local voxelX, voxelY, voxelZ = worldX / vs, worldY / vs, worldZ / vs
+		local baseX, baseY, baseZ = math.floor(voxelX), math.floor(voxelY), math.floor(voxelZ)
+		local fracX, fracY, fracZ = voxelX - baseX, voxelY - baseY, voxelZ - baseZ
+		local weights = { 0, 0, 0, 0, 0, 0, 0, 0 }
+		local total = 0
+
+		for dx = 0, 1 do
+			local xWeight = if dx == 0 then 1 - fracX else fracX
+			for dy = 0, 1 do
+				local yWeight = if dy == 0 then 1 - fracY else fracY
+				for dz = 0, 1 do
+					local zWeight = if dz == 0 then 1 - fracZ else fracZ
+					local voxel = Terrain:_getVoxel(baseX + dx, baseY + dy, baseZ + dz)
+					if voxel and (voxel.density or 0) > 0 then
+						local weight = xWeight * yWeight * zWeight * math.max(voxel.density, 0)
+						local layer = getMaterialLayer(voxel.material)
+						weights[layer] += weight
+						total += weight
+					end
+				end
+			end
+		end
+
+		if total <= 1e-6 then
+			weights[1] = 1
+			return weights
+		end
+		for index = 1, 6 do
+			weights[index] /= total
+		end
+		return weights
 	end
 
 	local function markChunkDirtyByCoords(cx, cy, cz, skipReplication)
@@ -705,6 +785,7 @@ Terrain.InitRenderer = function(renderer, renderer_signal, datamodel)
 			chunk.grassInstanceBuffer = nil
 			chunk.grassInstanceCount = nil
 		end
+		terrainSceneVersion += 1
 	end
 
 	function Terrain:_interpolateVertex(p1, p2, v1, v2)
@@ -826,17 +907,20 @@ Terrain.InitRenderer = function(renderer, renderer_signal, datamodel)
 				table.insert(vertices, {
 					position = { vA[1], vA[2], vA[3] },
 					color = { 255, 255, 255, 255 },
-					uv = { vA[1] * UV_SCALE, vA[3] * UV_SCALE },
+					uv = { 0, 0 },
+					materialWeights = Terrain:_getMaterialWeightsAtWorld(vA[1], vA[2], vA[3]),
 				})
 				table.insert(vertices, {
 					position = { vB[1], vB[2], vB[3] },
 					color = { 255, 255, 255, 255 },
-					uv = { vB[1] * UV_SCALE, vB[3] * UV_SCALE },
+					uv = { 0, 0 },
+					materialWeights = Terrain:_getMaterialWeightsAtWorld(vB[1], vB[2], vB[3]),
 				})
 				table.insert(vertices, {
 					position = { vC[1], vC[2], vC[3] },
 					color = { 255, 255, 255, 255 },
-					uv = { vC[1] * UV_SCALE, vC[3] * UV_SCALE },
+					uv = { 0, 0 },
+					materialWeights = Terrain:_getMaterialWeightsAtWorld(vC[1], vC[2], vC[3]),
 				})
 
 				local b = #vertices - 3
@@ -847,13 +931,13 @@ Terrain.InitRenderer = function(renderer, renderer_signal, datamodel)
 		end
 	end
 
-	local function addFaceVerts(vertices, indices, v1, v2, v3, v4, cr, cg, cb)
+	local function addFaceVerts(vertices, indices, v1, v2, v3, v4, cr, cg, cb, materialWeights)
 		local base = #vertices
 		local col = { cr, cg, cb, 255 }
-		table.insert(vertices, { position = v1, color = col })
-		table.insert(vertices, { position = v2, color = col })
-		table.insert(vertices, { position = v3, color = col })
-		table.insert(vertices, { position = v4, color = col })
+		table.insert(vertices, { position = v1, color = col, uv = { 0, 0 }, materialWeights = materialWeights })
+		table.insert(vertices, { position = v2, color = col, uv = { 0, 0 }, materialWeights = materialWeights })
+		table.insert(vertices, { position = v3, color = col, uv = { 0, 0 }, materialWeights = materialWeights })
+		table.insert(vertices, { position = v4, color = col, uv = { 0, 0 }, materialWeights = materialWeights })
 		table.insert(indices, base)
 		table.insert(indices, base + 1)
 		table.insert(indices, base + 2)
@@ -903,6 +987,7 @@ Terrain.InitRenderer = function(renderer, renderer_signal, datamodel)
 									local cr, cg, cb = col.R * 255, col.G * 255, col.B * 255
 									local px, py, pz = x * vs, y * vs, z * vs
 									local s = vs
+									local materialWeights = getSingleMaterialWeights(block.material)
 
 									local function V(dx, dy, dz)
 										return { px + dx * s, py + dy * s, pz + dz * s }
@@ -918,7 +1003,8 @@ Terrain.InitRenderer = function(renderer, renderer_signal, datamodel)
 											V(1, 0, 1),
 											cr,
 											cg,
-											cb
+											cb,
+											materialWeights
 										)
 									end
 									if not isSolid(x - 1, y, z) then
@@ -931,7 +1017,8 @@ Terrain.InitRenderer = function(renderer, renderer_signal, datamodel)
 											V(0, 0, 0),
 											cr,
 											cg,
-											cb
+											cb,
+											materialWeights
 										)
 									end
 									if not isSolid(x, y + 1, z) then
@@ -944,7 +1031,8 @@ Terrain.InitRenderer = function(renderer, renderer_signal, datamodel)
 											V(0, 1, 0),
 											cr,
 											cg,
-											cb
+											cb,
+											materialWeights
 										)
 									end
 									if not isSolid(x, y - 1, z) then
@@ -957,7 +1045,8 @@ Terrain.InitRenderer = function(renderer, renderer_signal, datamodel)
 											V(0, 0, 1),
 											cr,
 											cg,
-											cb
+											cb,
+											materialWeights
 										)
 									end
 									if not isSolid(x, y, z + 1) then
@@ -970,7 +1059,8 @@ Terrain.InitRenderer = function(renderer, renderer_signal, datamodel)
 											V(0, 0, 1),
 											cr,
 											cg,
-											cb
+											cb,
+											materialWeights
 										)
 									end
 									if not isSolid(x, y, z - 1) then
@@ -983,7 +1073,8 @@ Terrain.InitRenderer = function(renderer, renderer_signal, datamodel)
 											V(1, 0, 0),
 											cr,
 											cg,
-											cb
+											cb,
+											materialWeights
 										)
 									end
 								end
@@ -1010,6 +1101,7 @@ Terrain.InitRenderer = function(renderer, renderer_signal, datamodel)
 		end
 
 		local matCounts = {}
+		local colorR, colorG, colorB, colorCount = 0, 0, 0, 0
 		for x = x0, x1 do
 			local xr = Terrain._blocks[x]
 			if xr then
@@ -1021,6 +1113,12 @@ Terrain.InitRenderer = function(renderer, renderer_signal, datamodel)
 							-- only count voxels that are actually solid and not air
 							if v and (v.density or 0) >= Terrain.IsoLevel and v.material and v.material ~= "air" then
 								matCounts[v.material] = (matCounts[v.material] or 0) + 1
+								if v.color then
+									colorR += v.color.R
+									colorG += v.color.G
+									colorB += v.color.B
+									colorCount += 1
+								end
 							end
 						end
 					end
@@ -1034,6 +1132,9 @@ Terrain.InitRenderer = function(renderer, renderer_signal, datamodel)
 			end
 		end
 		chunk.dominantMaterial = bestMat
+		chunk.color = if colorCount > 0
+			then Color3.new(colorR / colorCount, colorG / colorCount, colorB / colorCount)
+			else Color3.new(0.45, 0.5, 0.4)
 
 		local sv, si = meshgen.autoSmooth(vertices, indices, {
 			angleThreshold = 90,
@@ -1051,11 +1152,13 @@ Terrain.InitRenderer = function(renderer, renderer_signal, datamodel)
 		local result = meshgen.buildMeshWithData(sv, si, {
 			indicesAreZeroBased = true,
 			usage = meshgen.Usage.Dynamic,
+			terrainMaterials = true,
 		})
 		if result then
 			chunk._cpuMeshData = result[1]
 			chunk.mesh = result[2]
 		end
+		terrainSceneVersion += 1
 		chunk.dirty = false
 
 		local PhysicsService = datamodel:GetService("UnifiedPhysicsService")
@@ -1136,8 +1239,6 @@ Terrain.InitRenderer = function(renderer, renderer_signal, datamodel)
 		local z0 = cz * CHUNK_SIZE
 		local vs = Terrain.VoxelSize
 
-		local qw = grassgen.BLADE_QUAD_WIDTH -- rename to avoid collision with quaternion qw
-		local ql = grassgen.BLADE_QUAD_LENGTH
 		local instances = {}
 
 		for x = x0, x0 + CHUNK_SIZE - 1 do
@@ -1819,7 +1920,63 @@ Terrain.InitRenderer = function(renderer, renderer_signal, datamodel)
 		Terrain:GenerateMesh()
 	end
 
-	function Terrain:StartRendering() end
+	function Terrain:StartRendering()
+		if terrainRenderStarted or isHeadlessRuntime or not renderer or not renderer.Hook then
+			return
+		end
+		terrainRenderStarted = true
+
+		renderer.Hook.new("Renderstep", function()
+			local count = 0
+			for _, chunk in pairs(Terrain._chunks) do
+				if chunk.mesh then
+					count += 1
+					local drawCall = terrainDrawList[count]
+					if not drawCall then
+						drawCall = {}
+						terrainDrawList[count] = drawCall
+					end
+					drawCall.mesh = chunk.mesh
+					drawCall.matrix = nil
+					drawCall.cframe = identityCFrame
+					drawCall.scale = identityScale
+					drawCall.color = if terrainTextureSet
+						then Color3.new(1, 1, 1)
+						else chunk.color or Color3.new(0.45, 0.5, 0.4)
+					drawCall.roughness = 0.9
+					drawCall.metallic = 0
+					drawCall.texture = terrainTextureSet
+					drawCall.MaterialKind = if terrainTextureSet then TERRAIN_MATERIAL_KIND else 0
+					drawCall.MaterialTileScale = 0.25
+					drawCall.CastShadow = true
+					drawCall.RecieveShadow = true
+					drawCall.Culling = true
+				end
+			end
+
+			for i = #terrainDrawList, count + 1, -1 do
+				terrainDrawList[i] = nil
+			end
+			renderer.MeshPool.DrawMeshList(terrainDrawList, count, 2, terrainSceneVersion)
+		end)
+
+		renderer.Hook.new("Shutdown", function()
+			for _, chunk in pairs(Terrain._chunks) do
+				releaseChunkResources(chunk)
+			end
+			if terrainTextureSet then
+				argon:Destroy3DTexture(renderer.Window, terrainTextureSet)
+				terrainTextureSet = nil
+			end
+			for index, texture in pairs(terrainLayerTextures) do
+				argon:Destroy3DTexture(renderer.Window, texture)
+				terrainLayerTextures[index] = nil
+			end
+			table.clear(terrainDrawList)
+		end)
+	end
+
+	Terrain:StartRendering()
 
 	return Terrain
 end

@@ -11,18 +11,10 @@ PlayerGui.InitRenderer = function(renderer, renderer_signal, datamodel)
 	})
 	GuiMirror.MarkTreeLocalOnly(PlayerGui)
 
-	PlayerGui.ChildAdded:Connect(function(child)
-		if type(child) == "table" and child.BaseClass == "UIContainer" then
+	renderer.Pool.new("2da", function()
+		for _, child in pairs(PlayerGui:GetChildren()) do
 			if child["render"] then
-				local renderId
-				renderId = renderer.Pool.new("2d", function()
-					if not child.render then
-						renderer.Pool.Destroy(renderId)
-						return
-					end
-					local dt = renderer.Lib2d.GetFrameTime()
-					child.render(renderer.Lib2d, child, dt, renderer.Structs, renderer, datamodel)
-				end, -5)
+				child.render()
 			end
 		end
 	end)

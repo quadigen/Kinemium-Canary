@@ -3,6 +3,7 @@ local Registry = require("@InstanceRegistry")
 
 local Enum = require("@EnumMap")
 local Datatypes = require("@Kinemium.datatypes.get")
+local TableEncoder = require("@SerialEncoder")
 
 local SerializationService = Instance.new("SerializationService")
 SerializationService.ExplorerHidden = true
@@ -135,6 +136,21 @@ for name, datatype in pairs(Datatypes) do
 	end
 end
 
+local function getTypeDeserializer(typeName)
+	local deserializer = TYPE_DESERIALIZERS[typeName]
+	if deserializer then
+		return deserializer
+	end
+
+	local datatype = Datatypes[typeName]
+	if type(datatype) == "table" and type(datatype.FromTable) == "function" then
+		deserializer = datatype.FromTable
+		TYPE_DESERIALIZERS[typeName] = deserializer
+	end
+
+	return deserializer
+end
+
 local workers = {}
 local pendingRequests = {}
 local reqIdCounter = 0
@@ -174,80 +190,82 @@ end
 
 local UseWorkers = true
 
-local function sanitizeForThread(value, seen)
-	local valueType = type(value)
-	if valueType == "number" or valueType == "string" or valueType == "boolean" or value == nil then
-		return value
-	end
-
-	if valueType == "buffer" then
-		return { __buf = zune.serde.base64.encode(buffer.tostring(value)) }
-	end
-
-	if valueType ~= "table" then
-		return nil
-	end
-
-	seen = seen or {}
-	if seen[value] then
-		return nil
-	end
-	seen[value] = true
-
-	local copy = {}
-	for key, child in pairs(value) do
-		local keyType = type(key)
-		if keyType == "string" or keyType == "number" or keyType == "boolean" then
-			copy[key] = sanitizeForThread(child, seen)
-		end
-	end
-
-	seen[value] = nil
-	return copy
-end
-
 local function compress(tbl)
+	local encoded = TableEncoder.encode(tbl)
+
 	if not UseWorkers then
-		local encoder = require("./_encoder")
-		local encoded = encoder.encode(tbl)
 		return zune.serde.zstd.compress(encoded, { level = 1 })
 	end
 
 	local w = getNextWorker()
+
 	reqIdCounter += 1
 	local id = reqIdCounter
+
 	pendingRequests[id] = coroutine.running()
+
 	print(`[SerializationService] Sending compress task {id} to worker...`)
-	w:send({ id = id, action = "compress", data = sanitizeForThread(tbl) })
+
+	w:send({
+		id = id,
+		action = "compress",
+		data = encoded,
+	})
+
 	local res = coroutine.yield()
+
 	if res.error then
 		error(res.error)
 	end
+
 	return res.result
 end
 
 local function decompress(str)
+	if type(str) == "string" then
+		str = buffer.fromstring(str)
+	end
+
 	if not UseWorkers then
-		local encoder = require("./_encoder")
-		local decompressed = zune.serde.zstd.decompress(str)
-		return encoder.decode(decompressed)
+		return TableEncoder.decode(zune.serde.zstd.decompress(str))
 	end
 
 	local w = getNextWorker()
+
 	reqIdCounter += 1
 	local id = reqIdCounter
+
 	pendingRequests[id] = coroutine.running()
+
 	print(`[SerializationService] Sending decompress task {id} to worker...`)
-	w:send({ id = id, action = "decompress", data = str })
+
+	w:send({
+		id = id,
+		action = "decompress",
+		data = str,
+	})
+
 	local res = coroutine.yield()
+
 	if res.error then
 		print("[SerializationService] Failed to decode serialized payload: " .. tostring(res.error))
 		return nil
 	end
-	return res.result
+
+	return TableEncoder.decode(res.result)
 end
 
 local sharedVisited = {}
+local KINE_MAGIC = "KINE"
+local KINE_VERSION = 2
+
+local OBJECT_CLASS = 1
+local OBJECT_NAME = 2
+local OBJECT_UID = 3
+local OBJECT_PROPS = 4
+local OBJECT_ATTRIBUTES = 5
+local OBJECT_TAGS = 6
+local OBJECT_CHILDREN = 7
 
 local function serialize_value(value, visited)
 	local luaType = type(value)
@@ -261,7 +279,7 @@ local function serialize_value(value, visited)
 	end
 
 	if luaType == "buffer" then
-		return { type = "Buf", value = zune.serde.base64.encode(buffer.tostring(value)) }, true
+		return value, true
 	end
 
 	if BLACKLISTED_TYPES[luaType] then
@@ -336,17 +354,17 @@ local function serialize_object(object, obj_visited)
 
 	local props = object._props
 	local result = {
-		c = object.ClassName,
-		n = object.Name,
-		p = {},
-		ch = {},
-		at = {},
-		t = {},
-		uid = props.UniqueId,
+		object.ClassName,
+		object.Name,
+		props.UniqueId or false,
+		{},
+		{},
+		object:GetTags(),
+		{},
 	}
 
 	local visited = sharedVisited
-	local resultProps = result.p
+	local resultProps = result[OBJECT_PROPS]
 	for propname, propvalue in pairs(props) do
 		if SKIP_PROPS[propname] then
 			continue
@@ -354,18 +372,7 @@ local function serialize_object(object, obj_visited)
 		if object.ClassName == "Player" and propname == "Character" then
 			continue
 		end
-		local propType = type(propname)
 		if string.sub(propname, 1, 1) == "_" and propname ~= "_mesh" then
-			continue
-		end
-		if propType == "buffer" or type(propvalue) == "buffer" then
-			resultProps[propname] = {
-				type = "Buf",
-				value = zune.serde.base64.encode(buffer.tostring(propvalue)),
-			}
-			print("Saved buffer: " .. propname)
-			print(`Buffer length: #{buffer.len(propvalue)}`)
-			print(propvalue)
 			continue
 		end
 		local serialized, ok = serialize_value(propvalue, visited)
@@ -379,7 +386,7 @@ local function serialize_object(object, obj_visited)
 
 	local attrs = object:GetAttributes()
 	if next(attrs) then
-		local resultAttrs = result.at
+		local resultAttrs = result[OBJECT_ATTRIBUTES]
 		for attrname, attrvalue in pairs(attrs) do
 			local serialized, ok = serialize_value(attrvalue, visited)
 			if ok then
@@ -391,13 +398,8 @@ local function serialize_object(object, obj_visited)
 		end
 	end
 
-	local tags = object:GetTags()
-	if #tags > 0 then
-		result.t = tags -- Directly assign  no need to copy one-by-one
-	end
-
 	local children = object:GetChildren()
-	local resultChildren = result.ch
+	local resultChildren = result[OBJECT_CHILDREN]
 	local childCount = 0
 	for i = 1, #children do
 		if children[i].ClassName == "Camera" then
@@ -421,7 +423,7 @@ local function deserialize_value(v)
 		return v
 	end
 	if v.type then
-		local deserializer = TYPE_DESERIALIZERS[v.type]
+		local deserializer = getTypeDeserializer(v.type)
 		if deserializer then
 			return deserializer(v)
 		else
@@ -450,7 +452,7 @@ SerializationService.InitRenderer = function(renderer, renderer_signal, datamode
 				objects[i] = serialize_object(instances[i], objVisited)
 			end
 			print("[DEBUG] SerializeInstancesAsync compressing objects")
-			local res = compress(objects)
+			local res = compress({ KINE_MAGIC, KINE_VERSION, objects })
 			print("[DEBUG] SerializeInstancesAsync compress done")
 			return res
 		end,
@@ -459,12 +461,22 @@ SerializationService.InitRenderer = function(renderer, renderer_signal, datamode
 			if not tbl then
 				return {}
 			end
+
+			local packedObjects = tbl[1] == KINE_MAGIC
+			if packedObjects then
+				if tbl[2] ~= KINE_VERSION or type(tbl[3]) ~= "table" then
+					warn("Unsupported KINE format version: " .. tostring(tbl[2]))
+					return {}
+				end
+				tbl = tbl[3]
+			end
+
 			local instances = {}
 			local id_map = {}
 			local instanceCount = 0
 
 			local function create_object(objTbl)
-				local className = objTbl.c
+				local className = if packedObjects then objTbl[OBJECT_CLASS] else objTbl.c
 				if type(className) ~= "string" or className == "" then
 					return nil
 				end
@@ -481,35 +493,41 @@ SerializationService.InitRenderer = function(renderer, renderer_signal, datamode
 				if not obj then
 					return nil
 				end
-				obj.Name = objTbl.n
+
+				local objectName = if packedObjects then objTbl[OBJECT_NAME] else objTbl.n
+				local objectUid = if packedObjects then objTbl[OBJECT_UID] else objTbl.uid
+				local objectProps = if packedObjects then objTbl[OBJECT_PROPS] else objTbl.p
+				local objectAttrs = if packedObjects then objTbl[OBJECT_ATTRIBUTES] else objTbl.at
+				local objectTags = if packedObjects then objTbl[OBJECT_TAGS] else objTbl.t
+				local objectChildren = if packedObjects then objTbl[OBJECT_CHILDREN] else objTbl.ch
+
+				obj.Name = objectName
 
 				if cb then
 					cb(obj)
 				end
 
-				if objTbl.uid then
-					id_map[objTbl.uid] = obj
-					obj._props.UniqueId = objTbl.uid
+				if objectUid then
+					id_map[objectUid] = obj
+					obj._props.UniqueId = objectUid
 				end
 
 				local objProps = obj._props
-				for k, v in pairs(objTbl.p) do
+				for k, v in pairs(objectProps or {}) do
 					objProps[k] = deserialize_value(v)
 				end
 
-				local objAttrs = objTbl.at
-				if objAttrs and next(objAttrs) then
-					for k, v in pairs(objAttrs) do
+				if objectAttrs and next(objectAttrs) then
+					for k, v in pairs(objectAttrs) do
 						obj:SetAttribute(k, deserialize_value(v))
 					end
 				end
 
-				obj.tags = objTbl.t or {}
+				obj.tags = objectTags or {}
 
-				local objChildren = objTbl.ch
-				if objChildren then
-					for i = 1, #objChildren do
-						local child = deserialize_object_with_map(objChildren[i])
+				if objectChildren then
+					for i = 1, #objectChildren do
+						local child = deserialize_object_with_map(objectChildren[i])
 						if child then
 							child.Parent = obj
 						end
@@ -525,7 +543,8 @@ SerializationService.InitRenderer = function(renderer, renderer_signal, datamode
 					instanceCount += 1
 					instances[instanceCount] = result
 				else
-					warn(("Failed to deserialize object of class %q: %s"):format(tostring(tbl[i].c), tostring(result)))
+					local className = if packedObjects then tbl[i][OBJECT_CLASS] else tbl[i].c
+					warn(("Failed to deserialize object of class %q: %s"):format(tostring(className), tostring(result)))
 				end
 			end
 

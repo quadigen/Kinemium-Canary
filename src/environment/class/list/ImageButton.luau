@@ -32,7 +32,7 @@ buttonProps.render = function(lib, object, dt, structs, renderer)
 	end
 
 	logic:Step(object, lib)
-	GuiObject.renderChildren(lib, object, dt, structs, renderer)
+	GuiObject.renderChildren(lib, object, dt, structs)
 
 	return framePos, frameSize, texture
 end

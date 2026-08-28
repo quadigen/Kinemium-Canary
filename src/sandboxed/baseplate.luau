@@ -11,9 +11,12 @@ local baseplate = Instance.new("Part")
 baseplate.CFrame = CFrame.new(0, -8, 0)
 baseplate.Size = Vector3.new(1000, 16, 1000)
 baseplate.Name = "Baseplate"
-baseplate.Material = Enum.Material.SmoothPlastic
 baseplate.Parent = workspace
 baseplate.Anchored = true
+
+local Texture = Instance.new("Texture")
+Texture.Texture = "./src/assets/images/tex.png"
+Texture.Parent = baseplate
 
 local spawnLocation = Instance.new("Part")
 spawnLocation.CFrame = CFrame.new(0, 0, 0)

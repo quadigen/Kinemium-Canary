@@ -6,7 +6,6 @@ local server = gns.Server
 local ser_adapters = require("@GNS/SerializerAdapters")
 local Player = require("@Player")
 local Instance = require("@Instance")
-local signal = require("@Kinemium.signal")
 
 local TICK_RATE = 20
 local TICK_INTERVAL = 1 / TICK_RATE

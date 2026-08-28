@@ -180,6 +180,9 @@ if(KINE_WITH_FILAMENT)
     kine_add_material(kine_water)
     kine_add_material(kine_decal)
     kine_add_material(kine_outline)
+    kine_add_material(kine_gizmo)
+    kine_add_material(kine_particle)
+    kine_add_material(kine_terrain)
 
     set(KINE_ASSIMP_TARGET "")
     if(KINE_WITH_ASSIMP)
@@ -188,6 +191,18 @@ if(KINE_WITH_FILAMENT)
             set(ASSIMP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
             set(ASSIMP_BUILD_ASSIMP_TOOLS OFF CACHE BOOL "" FORCE)
             set(ASSIMP_INSTALL OFF CACHE BOOL "" FORCE)
+            set(ASSIMP_WARNINGS_AS_ERRORS OFF CACHE BOOL "" FORCE)
+            set(ASSIMP_BUILD_ZLIB ON CACHE BOOL "Build a PIC zlib instead of selecting a non-PIC system archive" FORCE)
+            set(ASSIMP_BUILD_ALL_IMPORTERS_BY_DEFAULT OFF CACHE BOOL "" FORCE)
+            set(ASSIMP_BUILD_ALL_EXPORTERS_BY_DEFAULT OFF CACHE BOOL "" FORCE)
+            set(ASSIMP_BUILD_3MF_IMPORTER ON CACHE BOOL "" FORCE)
+            set(ASSIMP_BUILD_BLEND_IMPORTER ON CACHE BOOL "" FORCE)
+            set(ASSIMP_BUILD_COLLADA_IMPORTER ON CACHE BOOL "" FORCE)
+            set(ASSIMP_BUILD_FBX_IMPORTER ON CACHE BOOL "" FORCE)
+            set(ASSIMP_BUILD_GLTF_IMPORTER ON CACHE BOOL "" FORCE)
+            set(ASSIMP_BUILD_OBJ_IMPORTER ON CACHE BOOL "" FORCE)
+            set(ASSIMP_BUILD_PLY_IMPORTER ON CACHE BOOL "" FORCE)
+            set(ASSIMP_BUILD_STL_IMPORTER ON CACHE BOOL "" FORCE)
             FetchContent_Declare(
                 assimp
                 GIT_REPOSITORY https://github.com/assimp/assimp.git
@@ -212,6 +227,9 @@ if(KINE_WITH_FILAMENT)
         ${kine_water_GEN_CPP}
         ${kine_decal_GEN_CPP}
         ${kine_outline_GEN_CPP}
+        ${kine_gizmo_GEN_CPP}
+        ${kine_particle_GEN_CPP}
+        ${kine_terrain_GEN_CPP}
     )
 
     target_include_directories(kine_filament_shim

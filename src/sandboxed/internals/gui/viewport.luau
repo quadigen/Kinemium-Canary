@@ -5,6 +5,14 @@ local theme = StudioThemeService.SelectedTheme
 local Argon = require("@Argon")
 local retained = {}
 
+if IsServer then
+	return
+end
+
+if IsClient then
+	return
+end
+
 repeat
 	task.wait()
 until game.CoreGui:FindFirstChild("Studio")
@@ -39,6 +47,7 @@ local buttons: { EditorButton } = {
 }
 
 local rects = {}
+local guiYOffset = 32
 
 renderer.Pool.new("2d", function()
 	local dt = renderer.RuntimeLibrary.dt
@@ -53,6 +62,14 @@ renderer.Pool.new("2d", function()
 	end
 	if not absoluteSize then
 		return
+	end
+
+	for _, object in pairs(game.StarterGui:GetChildren()) do
+		if object:IsA("ScreenGui") then
+			object.OverrideScreenSize = true
+			object.Size = UDim2.new(0, absoluteSize.X, 0, absoluteSize.Y - guiYOffset)
+			object.RenderOffset = Vector2.new(absolutePosition.X, absolutePosition.Y + guiYOffset + 5)
+		end
 	end
 
 	for _, btn in pairs(buttons) do
@@ -92,12 +109,7 @@ renderer.Pool.new("2d", function()
 		engine_window = renderer.Window,
 
 		callback = function(params)
-			renderer:Set3DTexProps(
-				absolutePosition.X + 5,
-				absolutePosition.Y + 35,
-				absoluteSize.X - 10,
-				absoluteSize.Y - 35
-			)
+			renderer:Set3DTexProps(absolutePosition.X, absolutePosition.Y + 35, absoluteSize.X, absoluteSize.Y - 35)
 
 			Immco.RoundedRectangle({
 				x = absolutePosition.X + 8,

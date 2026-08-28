@@ -1,0 +1,67 @@
+material {
+    name : "KineTerrain",
+    shadingModel : lit,
+    blending : opaque,
+    requires : [ custom0, custom1 ],
+    variables : [ terrainWeights0, terrainWeights1 ],
+    parameters : [
+        { type : sampler2d, name : layer0 },
+        { type : sampler2d, name : layer1 },
+        { type : sampler2d, name : layer2 },
+        { type : sampler2d, name : layer3 },
+        { type : sampler2d, name : layer4 },
+        { type : sampler2d, name : layer5 },
+        { type : float, name : tileScale },
+        { type : float, name : roughness }
+    ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        material.terrainWeights0 = getCustom0();
+        material.terrainWeights1 = getCustom1();
+    }
+}
+
+fragment {
+    vec4 sampleTriplanar(sampler2D tex, vec3 position, vec3 normal, float scale) {
+        vec3 weights = pow(abs(normal), vec3(4.0));
+        weights /= max(weights.x + weights.y + weights.z, 0.0001);
+
+        vec4 x = texture(tex, position.zy * scale);
+        vec4 y = texture(tex, position.xz * scale);
+        vec4 z = texture(tex, position.xy * scale);
+        return x * weights.x + y * weights.y + z * weights.z;
+    }
+
+    void material(inout MaterialInputs material) {
+        vec4 weights0 = max(variable_terrainWeights0, vec4(0.0));
+        vec2 weights1 = max(variable_terrainWeights1.xy, vec2(0.0));
+        weights0 = weights0 * weights0 * (vec4(3.0) - 2.0 * weights0);
+        weights1 = weights1 * weights1 * (vec2(3.0) - 2.0 * weights1);
+
+        float weightSum = dot(weights0, vec4(1.0)) + weights1.x + weights1.y;
+        if (weightSum < 0.0001) {
+            weights0.x = 1.0;
+            weightSum = 1.0;
+        }
+        weights0 /= weightSum;
+        weights1 /= weightSum;
+
+        vec3 position = getUserWorldPosition();
+        vec3 normal = getWorldGeometricNormalVector();
+        vec4 color = vec4(0.0);
+
+        if (weights0.x > 0.0001) color += sampleTriplanar(materialParams_layer0, position, normal, materialParams.tileScale) * weights0.x;
+        if (weights0.y > 0.0001) color += sampleTriplanar(materialParams_layer1, position, normal, materialParams.tileScale) * weights0.y;
+        if (weights0.z > 0.0001) color += sampleTriplanar(materialParams_layer2, position, normal, materialParams.tileScale) * weights0.z;
+        if (weights0.w > 0.0001) color += sampleTriplanar(materialParams_layer3, position, normal, materialParams.tileScale) * weights0.w;
+        if (weights1.x > 0.0001) color += sampleTriplanar(materialParams_layer4, position, normal, materialParams.tileScale) * weights1.x;
+        if (weights1.y > 0.0001) color += sampleTriplanar(materialParams_layer5, position, normal, materialParams.tileScale) * weights1.y;
+
+        prepareMaterial(material);
+        material.baseColor = color;
+        material.roughness = materialParams.roughness;
+        material.metallic = 0.0;
+    }
+}

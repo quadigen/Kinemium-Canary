@@ -3,6 +3,9 @@ local propTable = {
 	Brightness = 0.0,
 	Contrast = 1.0,
 	Saturation = 1.0,
+	Vibrance = 1.0,
+	Temperature = 0.0,
+	Tint = 0.0,
 	Enabled = true,
 	Name = "ColorEffect",
 	BaseClass = "LightingPreprocess",
@@ -11,26 +14,32 @@ local propTable = {
 return {
 	class = "ColorEffect",
 
-	callback = function(instance)
-		local r3d = require("@r3d")
+	callback = function(instance, renderer)
+		local Argon = require("@Argon")
 
 		instance:SetProperties(propTable)
 
-		local envcolor = r3d.structs.R3D_EnvColor:new({
-			brightness = instance.Brightness,
-			contrast = instance.Contrast,
-			saturation = instance.Saturation,
-		})
-		instance:SetMetadata("EffectObject", envcolor)
+		local function applyFilament()
+			if not renderer or not renderer.Window then
+				return
+			end
+			local active = instance.Enabled and instance.Parent ~= nil and instance.Parent:IsA("Lighting")
+			Argon:SetColorGrading(renderer.Window, {
+				Enabled = active,
+				Exposure = instance.Brightness,
+				Contrast = math.max(instance.Contrast, 0.001),
+				Saturation = math.max(instance.Saturation, 0),
+				Vibrance = math.max(instance.Vibrance, 0),
+				Temperature = math.clamp(instance.Temperature, -1, 1),
+				Tint = math.clamp(instance.Tint, -1, 1),
+			})
+		end
 
 		instance.Changed:Connect(function(property, value)
-			envcolor = r3d.structs.R3D_EnvColor:new({
-				brightness = instance.Brightness,
-				contrast = instance.Contrast,
-				saturation = instance.Saturation,
-			})
-			instance:SetMetadata("EffectObject", envcolor)
+			applyFilament()
 		end)
+		instance.AncestryChanged:Connect(applyFilament)
+		applyFilament()
 
 		return instance
 	end,

@@ -1,8 +1,6 @@
 local Color3 = require("@Color3")
 local Enum = require("@EnumMap")
-local adapter = require("@RaylibAdapter")
-local lib = adapter.lib
-local arect = require("@arect")
+local argon = require("@Argon")
 
 local RichText = {}
 
@@ -19,16 +17,18 @@ local function clamp01(value)
 	return value
 end
 
-local textureCache = {}
+local imageCache = {}
 
-local function getTexture(path)
-	if textureCache[path] then
-		return textureCache[path]
+local function getImage(path)
+	if imageCache[path] then
+		return imageCache[path]
 	end
-	local tex = lib.LoadTexture(path)
-	textureCache[path] = tex
-
-	return tex
+	-- Argon's adapter already keeps its own path->image cache internally
+	-- (SDLAdapter:CreateImageFromPath), but we still keep a thin local one
+	-- so lookups here don't cross the FFI boundary every draw call.
+	local image = argon:CreateImageFromPath(path)
+	imageCache[path] = image
+	return image
 end
 
 -- Inline symbol tag syntax: <image:path/to/img.png,size:50,50>
@@ -95,25 +95,29 @@ local function cloneStyle(style)
 	}
 end
 
+-- Argon's colors are plain {R,G,B,A} tables with 0-1 float channels (see
+-- GuiObject.lua's toArgonColor) rather than raylib's 0-255 int Color struct,
+-- so this just builds/passes through that shape instead of constructing an
+-- adapter struct.
 local function resolveColor3(c, transparency)
 	if c then
-		if c.ToRaylib then
-			return c:ToRaylib(transparency)
+		if c.ToArgon then
+			return c:ToArgon(transparency)
 		elseif c.R and c.G and c.B then
-			return adapter.structs.Color:new({
-				r = math.clamp(math.floor(c.R * 255 + 0.5), 0, 255),
-				g = math.clamp(math.floor(c.G * 255 + 0.5), 0, 255),
-				b = math.clamp(math.floor(c.B * 255 + 0.5), 0, 255),
-				a = math.clamp(math.floor((1 - (transparency or 0)) * 255 + 0.5), 0, 255),
-			})
+			return {
+				R = c.R,
+				G = c.G,
+				B = c.B,
+				A = clamp01(1 - (transparency or 0)),
+			}
 		end
 	end
-	return adapter.structs.Color:new({
-		r = 255,
-		g = 255,
-		b = 255,
-		a = math.clamp(math.floor((1 - (transparency or 0)) * 255 + 0.5), 0, 255),
-	})
+	return {
+		R = 1,
+		G = 1,
+		B = 1,
+		A = clamp01(1 - (transparency or 0)),
+	}
 end
 
 local function parseColorString(value, fallback)
@@ -411,6 +415,14 @@ local function buildLayout(object, runs, frameSize, spacing, renderer, fallbackF
 		return resolved
 	end
 
+	local function countGraphemes(text)
+		local count = 0
+		for _ in text:gmatch(UTF8_CHAR_PATTERN) do
+			count += 1
+		end
+		return count
+	end
+
 	local function measureText(font, text, fontSize)
 		if text == "" then
 			return 0
@@ -422,7 +434,10 @@ local function buildLayout(object, runs, frameSize, spacing, renderer, fallbackF
 			return cached
 		end
 
-		local width = lib.MeasureTextEx(font, text, fontSize, spacing).x
+		local baseWidth = argon:MeasureText(renderer.Window, text, fontSize, font)
+		local graphemeCount = countGraphemes(text)
+		local width = baseWidth + spacing * math.max(0, graphemeCount - 1)
+
 		measureCache[key] = width
 		measureCacheCount += 1
 
@@ -645,7 +660,7 @@ function RichText.GetLayout(object, frameSize, renderer, fallbackFont)
 	else
 		baseFontName = Enum.Font.DefaultEngineFont and Enum.Font.DefaultEngineFont.Name or "DefaultEngineFont"
 	end
-	local resolvedFont = renderer.Font.Get(baseFontName) or fallbackFont
+	local resolvedFont = fallbackFont
 	local baseStyle = {
 		color = object.TextColor3,
 		transparency = 0,
@@ -722,7 +737,7 @@ function RichText.GetLayout(object, frameSize, renderer, fallbackFont)
 	return cache.layout, spacing
 end
 
-function RichText.DrawLayout(drawLib, object, framePos, frameSize, layout, spacing)
+function RichText.DrawLayout(drawLib, window, object, framePos, frameSize, layout, spacing)
 	if not layout then
 		return
 	end
@@ -747,27 +762,19 @@ function RichText.DrawLayout(drawLib, object, framePos, frameSize, layout, spaci
 		local drawX = framePos.X + lineOffsetX
 		for _, segment in ipairs(line.segments) do
 			if segment.type == "image" then
-				local tex = getTexture(segment.path)
+				local image = getImage(segment.path)
 				local declaredW = segment.width
 				local declaredH = segment.size
 
 				local imgY = drawY + (line.height - declaredH) * 0.5
 
-				-- Read texture dimensions from buffer struct
-				local texW = buffer.readi32(tex, 4)
-				local texH = buffer.readi32(tex, 8)
+				drawLib:DrawImageSized(window, image, {
+					x = drawX,
+					y = imgY,
+					width = declaredW,
+					height = declaredH,
+				})
 
-				local srcRect = arect.new(0, 0, texW, texH)
-				local dstRect = arect.new(drawX, imgY, declaredW, declaredH)
-
-				drawLib.DrawTexturePro(
-					tex,
-					srcRect.rect,
-					dstRect.rect,
-					vector.create(0, 0),
-					0,
-					Color3.new(1, 1, 1):ToRaylib(object.TextTransparency)
-				)
 				drawX += declaredW
 				continue
 			end
@@ -793,82 +800,76 @@ function RichText.DrawLayout(drawLib, object, framePos, frameSize, layout, spaci
 					local strokeTransparency = combineTransparency(segmentTransparency, object.TextStrokeTransparency)
 					if strokeTransparency < 1 then
 						local strokeColor = resolveColor3(object.TextStrokeColor, strokeTransparency)
-						drawLib.DrawTextEx(
-							segment.font,
-							segment.text,
-							vector.create(drawX - 1, drawY),
-							segment.size,
-							spacing,
-							strokeColor
-						)
-						drawLib.DrawTextEx(
-							segment.font,
-							segment.text,
-							vector.create(drawX + 1, drawY),
-							segment.size,
-							spacing,
-							strokeColor
-						)
-						drawLib.DrawTextEx(
-							segment.font,
-							segment.text,
-							vector.create(drawX, drawY - 1),
-							segment.size,
-							spacing,
-							strokeColor
-						)
-						drawLib.DrawTextEx(
-							segment.font,
-							segment.text,
-							vector.create(drawX, drawY + 1),
-							segment.size,
-							spacing,
-							strokeColor
-						)
+						drawLib:DrawText(window, segment.text, {
+							X = drawX - 1,
+							Y = drawY,
+							TextSize = segment.size,
+							Font = segment.font,
+							Color = strokeColor,
+						})
+						drawLib:DrawText(window, segment.text, {
+							X = drawX + 1,
+							Y = drawY,
+							TextSize = segment.size,
+							Font = segment.font,
+							Color = strokeColor,
+						})
+						drawLib:DrawText(window, segment.text, {
+							X = drawX,
+							Y = drawY - 1,
+							TextSize = segment.size,
+							Font = segment.font,
+							Color = strokeColor,
+						})
+						drawLib:DrawText(window, segment.text, {
+							X = drawX,
+							Y = drawY + 1,
+							TextSize = segment.size,
+							Font = segment.font,
+							Color = strokeColor,
+						})
 					end
 				end
 
-				drawLib.DrawTextEx(
-					segment.font,
-					segment.text,
-					vector.create(drawX, drawY),
-					segment.size,
-					spacing,
-					segmentColor
-				)
+				drawLib:DrawText(window, segment.text, {
+					X = drawX,
+					Y = drawY,
+					TextSize = segment.size,
+					Font = segment.font,
+					Color = segmentColor,
+				})
 
 				if segment.bold then
-					drawLib.DrawTextEx(
-						segment.font,
-						segment.text,
-						vector.create(drawX + 1, drawY),
-						segment.size,
-						spacing,
-						segmentColor
-					)
+					drawLib:DrawText(window, segment.text, {
+						X = drawX + 1,
+						Y = drawY,
+						TextSize = segment.size,
+						Font = segment.font,
+						Color = segmentColor,
+					})
 				end
 
 				if segment.underline or segment.strike then
 					local lineThickness = math.max(1, math.floor((segment.size * 0.08) + 0.5))
 					if segment.underline then
 						local underlineY = drawY + segment.size
-						drawLib.DrawRectangle(
-							math.floor(drawX),
-							math.floor(underlineY),
-							math.max(1, math.floor(segment.width + 0.5)),
-							lineThickness,
-							segmentColor
-						)
+						drawLib:DrawRectangle(window, {
+							x = math.floor(drawX),
+							y = math.floor(underlineY),
+							width = math.max(1, math.floor(segment.width + 0.5)),
+							height = lineThickness,
+							Color = segmentColor,
+						})
 					end
 					if segment.strike then
 						local strikeY = drawY + (segment.size * 0.55)
-						drawLib.DrawRectangle(
-							math.floor(drawX),
-							math.floor(strikeY),
-							math.max(1, math.floor(segment.width + 0.5)),
-							lineThickness,
-							segmentColor
-						)
+						drawLib:DrawRectangle(window, {
+							x = math.floor(drawX),
+							y = math.floor(strikeY),
+							width = math.max(1, math.floor(segment.width + 0.5)),
+							height = lineThickness,
+							Color = segmentColor,
+						})
 					end
 				end
 			end

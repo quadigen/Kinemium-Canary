@@ -1,0 +1,17 @@
+material {
+    name : "KineGizmo",
+    shadingModel : unlit,
+    blending : opaque,
+    culling : none,
+    depthWrite : false,
+    depthCulling : false,
+    parameters : [
+        { type : float4, name : baseColor }
+    ]
+}
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor = materialParams.baseColor;
+    }
+}

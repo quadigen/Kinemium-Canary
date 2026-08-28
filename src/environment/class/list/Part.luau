@@ -187,6 +187,15 @@ return {
 			end
 		end)
 
+		local function updatePhysicsParticipation()
+			if renderer and renderer.EventBus and instance.Parent then
+				renderer.EventBus:Fire("UpdatePart", instance)
+			end
+		end
+		instance:_SetPropertyHandler("Anchored", updatePhysicsParticipation)
+		instance:_SetPropertyHandler("CanCollide", updatePhysicsParticipation)
+		instance:_SetPropertyHandler("IsKinematic", updatePhysicsParticipation)
+
 		instance.Destroying:Connect(function()
 			instance._mesh = nil
 

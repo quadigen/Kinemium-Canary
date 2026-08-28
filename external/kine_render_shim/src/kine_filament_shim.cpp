@@ -30,6 +30,8 @@
 #include <filament/RenderableManager.h>
 #include <filament/TransformManager.h>
 #include <filament/LightManager.h>
+#include <filament/ColorGrading.h>
+#include <filament/Options.h>
 #include <filament/VertexBuffer.h>
 #include <filament/IndexBuffer.h>
 #include <filament/InstanceBuffer.h>
@@ -57,6 +59,9 @@
 #include "kine_water_package.h"
 #include "kine_decal_package.h"
 #include "kine_outline_package.h"
+#include "kine_gizmo_package.h"
+#include "kine_particle_package.h"
+#include "kine_terrain_package.h"
 
 #include <geometry/SurfaceOrientation.h>
 using namespace filament::geometry;
@@ -75,6 +80,7 @@ struct VkQueue_T;
 #endif
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -215,19 +221,28 @@ struct KineVertex {
 
 struct vector3 { float x, y, z; };
 
+struct KineTerrainWeights {
+    float values[8];
+};
+
 struct KineMesh {
     VertexBuffer* vb       = nullptr;
     IndexBuffer*  ib       = nullptr;
     uint32_t      indexCount = 0;
     std::vector<KineVertex>  vertices;
+    std::vector<KineTerrainWeights> terrainWeights;
     std::vector<uint16_t>    indices;
     Box localBounds;
 };
 
 struct KineTexHandle {
-    Texture* tex       = nullptr;
-    Texture* normalTex = nullptr;
-    Texture* ormTex    = nullptr;
+    Texture* tex         = nullptr;
+    Texture* normalTex   = nullptr;
+    Texture* ormTex      = nullptr;
+    Texture* heightTex   = nullptr;
+    float    heightScale = 0.0f;
+    Texture* terrainLayers[6] = {};
+    bool     ownsTextures = true;
 };
 
 // ---------------------------------------------------------------------------
@@ -254,18 +269,19 @@ struct KineBatchKey {
     float     r = 0, g = 0, b = 0;
     float     param1 = 0, param2 = 0, param3 = 0;
     float     transmission  = 0;
+    float     particleUvOffsetY = 0;
     bool      castShadow    = false;
     bool      receiveShadow = false;
     bool      culling       = true;
 
-    KineTexHandle* texture;
+    KineTexHandle* texture = nullptr;
 
     bool operator==(const KineBatchKey& o) const noexcept
     {
         return mesh == o.mesh && streamId == o.streamId && materialKind == o.materialKind &&
                r == o.r && g == o.g && b == o.b &&
                param1 == o.param1 && param2 == o.param2 && param3 == o.param3 &&
-               transmission == o.transmission &&
+               transmission == o.transmission && particleUvOffsetY == o.particleUvOffsetY &&
                castShadow == o.castShadow && receiveShadow == o.receiveShadow &&
                culling == o.culling && texture == o.texture;
     }
@@ -285,6 +301,7 @@ struct KineBatchKeyHash {
         mix(std::hash<float>()(k.param2));
         mix(std::hash<float>()(k.param3));
         mix(std::hash<float>()(k.transmission));
+        mix(std::hash<float>()(k.particleUvOffsetY));
         mix(std::hash<bool>()(k.castShadow));
         mix(std::hash<bool>()(k.receiveShadow));
         mix(std::hash<bool>()(k.culling));
@@ -310,6 +327,14 @@ struct KinePersistentBatch {
     uint64_t lastUsedFrame = 0;
 };
 
+struct KineFilamentInstanceBatch {
+    KineFilamentContext* ctx = nullptr;
+    KineBatchKey key;
+    MaterialInstance* matInst = nullptr;
+    std::vector<math::mat4f> transforms;
+    std::vector<KineBuiltBatch> chunks;
+};
+
 struct KineRetainedListState {
     uint64_t version = 0;
     bool initialized = false;
@@ -329,6 +354,7 @@ struct KineFilamentContext {
     Scene*           scene        = nullptr;
     View*            view         = nullptr;
     Camera*          camera       = nullptr;
+    ColorGrading*    colorGrading = nullptr;
     Entity           cameraEntity;
     math::double3    cameraEye{0,0,0};
     math::double3    cameraTarget{0,0,-1};
@@ -358,6 +384,10 @@ struct KineFilamentContext {
     Material* waterMaterial = nullptr;
     Material* decalMaterial = nullptr;
     Material* outlineMaterial = nullptr;
+    Material* gizmoMaterial = nullptr;
+    Material* particleMaterial = nullptr;
+    Material* terrainMaterial = nullptr;
+    KineMesh* particleQuadMesh = nullptr;
     float     time = 0.0f;   // accumulate once per frame for animation
 
     // Host GL context, captured at Create() time so we can hand control
@@ -1013,6 +1043,53 @@ static KineMesh* buildCube()
     return m;
 }
 
+static KineMesh* buildDisplacedCube(int segments = 48)
+{
+    auto* m = new KineMesh();
+    const float n = 0.5f;
+    struct Face { float nx,ny,nz; float ax,ay,az; float bx,by,bz; };
+    const Face faces[6] = {
+        { 0, 0,  1,  1, 0, 0,  0, 1, 0},
+        { 0, 0, -1, -1, 0, 0,  0, 1, 0},
+        { 1, 0,  0,  0, 1, 0,  0, 0, 1},
+        {-1, 0,  0,  0, 1, 0,  0, 0,-1},
+        { 0, 1,  0,  1, 0, 0,  0, 0,-1},
+        { 0,-1,  0,  1, 0, 0,  0, 0, 1},
+    };
+
+    for (const Face& face : faces) {
+        const uint16_t base = (uint16_t)m->vertices.size();
+        for (int y = 0; y <= segments; ++y) {
+            const float v = (float)y / (float)segments;
+            const float sv = v - 0.5f;
+            for (int x = 0; x <= segments; ++x) {
+                const float u = (float)x / (float)segments;
+                const float su = u - 0.5f;
+                m->vertices.push_back({
+                    face.nx * n + face.ax * su + face.bx * sv,
+                    face.ny * n + face.ay * su + face.by * sv,
+                    face.nz * n + face.az * su + face.bz * sv,
+                    face.nx, face.ny, face.nz, u, v,
+                });
+            }
+        }
+
+        const int row = segments + 1;
+        for (int y = 0; y < segments; ++y) {
+            for (int x = 0; x < segments; ++x) {
+                const uint16_t i0 = base + (uint16_t)(y * row + x);
+                const uint16_t i1 = i0 + 1;
+                const uint16_t i3 = base + (uint16_t)((y + 1) * row + x);
+                const uint16_t i2 = i3 + 1;
+                m->indices.push_back(i0); m->indices.push_back(i1); m->indices.push_back(i2);
+                m->indices.push_back(i0); m->indices.push_back(i2); m->indices.push_back(i3);
+            }
+        }
+    }
+    m->indexCount = (uint32_t)m->indices.size();
+    return m;
+}
+
 static KineMesh* buildSphere(int slices = 16, int stacks = 12)
 {
     auto* m = new KineMesh();
@@ -1087,6 +1164,20 @@ static KineMesh* buildDecalQuad()
         { 0.5f, 0.0f, -0.5f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f},
         { 0.5f, 0.0f,  0.5f, 0.0f, 1.0f, 0.0f, 1.0f, 1.0f},
         {-0.5f, 0.0f,  0.5f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f},
+    };
+    m->indices = {0, 1, 2, 0, 2, 3};
+    m->indexCount = (uint32_t)m->indices.size();
+    return m;
+}
+
+static KineMesh* buildParticleQuad()
+{
+    auto* m = new KineMesh();
+    m->vertices = {
+        {-0.5f, -0.5f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f},
+        { 0.5f, -0.5f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f},
+        { 0.5f,  0.5f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f},
+        {-0.5f,  0.5f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f},
     };
     m->indices = {0, 1, 2, 0, 2, 3};
     m->indexCount = (uint32_t)m->indices.size();
@@ -1260,8 +1351,8 @@ static KineMesh* buildRotateGizmo()
 {
     auto* m = new KineMesh();
     appendTorus(m, 0, 0.85f, 0.018f, 64, 8);
-    appendTorus(m, 1, 0.92f, 0.018f, 64, 8);
-    appendTorus(m, 2, 0.99f, 0.018f, 64, 8);
+    appendTorus(m, 1, 0.85f, 0.018f, 64, 8);
+    appendTorus(m, 2, 0.85f, 0.018f, 64, 8);
     appendCuboid(m, 0.0f, 0.0f, 0.0f, 0.07f, 0.07f, 0.07f);
     m->indexCount = (uint32_t)m->indices.size();
     return m;
@@ -1276,11 +1367,11 @@ static KineGizmoAxisMeshes buildRotateGizmoAxes()
     g.x->indexCount = (uint32_t)g.x->indices.size();
 
     g.y = new KineMesh();
-    appendTorus(g.y, 1, 0.92f, 0.018f, 64, 8);
+    appendTorus(g.y, 1, 0.85f, 0.018f, 64, 8);
     g.y->indexCount = (uint32_t)g.y->indices.size();
 
     g.z = new KineMesh();
-    appendTorus(g.z, 2, 0.99f, 0.018f, 64, 8);
+    appendTorus(g.z, 2, 0.85f, 0.018f, 64, 8);
     g.z->indexCount = (uint32_t)g.z->indices.size();
 
     return g;
@@ -1369,28 +1460,55 @@ static void uploadMesh(KineMesh* m, Engine* engine)
     size_t vsize = m->vertices.size() * sizeof(KineVertex);
     size_t isize = m->indices.size()  * sizeof(uint16_t);
 
-    // --- compute packed tangent frames from the normals we already have ---
+    // Build the tangent frame from the actual mesh topology and UVs. Filament
+    // 1.74's UV builder does not support strides for normals, so deinterleave
+    // all three inputs into contiguous temporary arrays first.
+    std::vector<math::float3> positions(m->vertices.size());
     std::vector<math::float3> normals(m->vertices.size());
-    for (size_t i = 0; i < m->vertices.size(); ++i)
-        normals[i] = { m->vertices[i].nx, m->vertices[i].ny, m->vertices[i].nz };
+    std::vector<math::float2> uvs(m->vertices.size());
+    for (size_t i = 0; i < m->vertices.size(); ++i) {
+        const KineVertex& vertex = m->vertices[i];
+        positions[i] = {vertex.px, vertex.py, vertex.pz};
+        normals[i] = {vertex.nx, vertex.ny, vertex.nz};
+        uvs[i] = {vertex.u, vertex.v};
+    }
 
     std::vector<math::short4> quats(m->vertices.size());
     auto orientation = SurfaceOrientation::Builder()
         .vertexCount((uint32_t)m->vertices.size())
         .normals(normals.data())
+        .uvs(uvs.data())
+        .positions(positions.data())
+        .triangleCount(m->indices.size() / 3)
+        .triangles(reinterpret_cast<const math::ushort3*>(m->indices.data()))
         .build();
+    if (!orientation) {
+        fprintf(stderr, "[Kine] UV tangent generation failed; using normal-derived frames\n");
+        orientation = SurfaceOrientation::Builder()
+            .vertexCount((uint32_t)m->vertices.size())
+            .normals(normals.data())
+            .build();
+        if (!orientation) return;
+    }
     orientation->getQuats(quats.data(), (uint32_t)m->vertices.size());
 
     delete orientation;
 
-    m->vb = VertexBuffer::Builder()
+    const bool hasTerrainWeights = m->terrainWeights.size() == m->vertices.size();
+    VertexBuffer::Builder vertexBufferBuilder;
+    vertexBufferBuilder
         .vertexCount((uint32_t)m->vertices.size())
-        .bufferCount(2)   // buffer 0 = interleaved pos/uv, buffer 1 = tangents
+        .bufferCount(hasTerrainWeights ? 3 : 2)
         .attribute(VertexAttribute::POSITION, 0, VertexBuffer::AttributeType::FLOAT3, offsetof(KineVertex, px), sizeof(KineVertex))
         .attribute(VertexAttribute::UV0,      0, VertexBuffer::AttributeType::FLOAT2, offsetof(KineVertex, u),  sizeof(KineVertex))
         .attribute(VertexAttribute::TANGENTS, 1, VertexBuffer::AttributeType::SHORT4, 0, sizeof(math::short4))
-        .normalized(VertexAttribute::TANGENTS)
-        .build(*engine);
+        .normalized(VertexAttribute::TANGENTS);
+    if (hasTerrainWeights) {
+        vertexBufferBuilder
+            .attribute(VertexAttribute::CUSTOM0, 2, VertexBuffer::AttributeType::FLOAT4, 0, sizeof(KineTerrainWeights))
+            .attribute(VertexAttribute::CUSTOM1, 2, VertexBuffer::AttributeType::FLOAT4, 4 * sizeof(float), sizeof(KineTerrainWeights));
+    }
+    m->vb = vertexBufferBuilder.build(*engine);
 
     // buffer 0: interleaved position/normal/uv, as before
     void* vcopy = malloc(vsize);
@@ -1406,6 +1524,15 @@ static void uploadMesh(KineMesh* m, Engine* engine)
     m->vb->setBufferAt(*engine, 1,
         VertexBuffer::BufferDescriptor(qcopy, qsize,
             [](void* buf, size_t, void*){ free(buf); }, nullptr));
+
+    if (hasTerrainWeights) {
+        const size_t weightSize = m->terrainWeights.size() * sizeof(KineTerrainWeights);
+        void* weightCopy = malloc(weightSize);
+        memcpy(weightCopy, m->terrainWeights.data(), weightSize);
+        m->vb->setBufferAt(*engine, 2,
+            VertexBuffer::BufferDescriptor(weightCopy, weightSize,
+                [](void* buf, size_t, void*){ free(buf); }, nullptr));
+    }
 
     m->ib = IndexBuffer::Builder()
         .indexCount(m->indexCount)
@@ -1461,11 +1588,24 @@ bool rebuildRenderTarget(KineFilamentContext* ctx, unsigned int textureId, int w
 static void kine_apply_material_params(MaterialInstance* mi, const KineBatchKey& key, float time, Texture* whiteTex)
 {
     if (key.materialKind == KINE_MAT_GLASS) {
-        mi->setParameter("baseColor", RgbType::LINEAR, math::float3{key.r, key.g, key.b});
+        // Keep the dielectric surface mostly neutral; use absorption below
+        // for physically plausible colored transmission through the volume.
+        const math::float3 surfaceColor{
+            0.82f + key.r * 0.18f,
+            0.82f + key.g * 0.18f,
+            0.82f + key.b * 0.18f,
+        };
+        const math::float3 absorption{
+            (1.0f - std::clamp(key.r, 0.0f, 1.0f)) * 0.15f,
+            (1.0f - std::clamp(key.g, 0.0f, 1.0f)) * 0.15f,
+            (1.0f - std::clamp(key.b, 0.0f, 1.0f)) * 0.15f,
+        };
+        mi->setParameter("baseColor", RgbType::LINEAR, surfaceColor);
         mi->setParameter("roughness",    key.param1);
         mi->setParameter("ior",          key.param2);
         mi->setParameter("thickness",    key.param3);
         mi->setParameter("transmission", key.transmission);
+        mi->setParameter("absorption",   absorption);
     } else if (key.materialKind == KINE_MAT_NEON) {
         mi->setParameter("emissiveColor", RgbType::LINEAR, math::float3{key.r, key.g, key.b});
         mi->setParameter("intensity",     key.param1);
@@ -1482,41 +1622,91 @@ static void kine_apply_material_params(MaterialInstance* mi, const KineBatchKey&
     } else if (key.materialKind == KINE_MAT_OUTLINE) {
         mi->setParameter("baseColor", RgbType::LINEAR, math::float3{key.r, key.g, key.b});
         mi->setParameter("thickness", key.param1);
-    } else {
+    } else if (key.materialKind == KINE_MAT_GIZMO) {
         mi->setParameter("baseColor", RgbaType::LINEAR, math::float4{key.r, key.g, key.b, 1.0f});
-        mi->setParameter("roughness", key.param1);
-        mi->setParameter("metallic",  key.param2);
-        float uvScale = key.param3 > 0.0f ? key.param3 : 1.0f;
-        mi->setParameter("uvScale", math::float2{uvScale, uvScale});
+    } else if (key.materialKind == KINE_MAT_PARTICLE) {
+        mi->setParameter("baseColor", RgbaType::LINEAR, math::float4{key.r, key.g, key.b, key.transmission});
+        mi->setParameter("uvScale", math::float2{key.param1, key.param2});
+        mi->setParameter("uvOffset", math::float2{key.param3, key.particleUvOffsetY});
 
+        TextureSampler clampSampler(
+            TextureSampler::MinFilter::LINEAR,
+            TextureSampler::MagFilter::LINEAR,
+            TextureSampler::WrapMode::CLAMP_TO_EDGE
+        );
+
+        if (key.texture && key.texture->tex) {
+            mi->setParameter("hasTexture", 1.0f);
+            mi->setParameter("baseColorMap", key.texture->tex, clampSampler);
+        } else {
+            mi->setParameter("hasTexture", 0.0f);
+            mi->setParameter("baseColorMap", whiteTex, clampSampler);
+        }
+    } else if (key.materialKind == KINE_MAT_TERRAIN) {
         TextureSampler repeatSampler(
             TextureSampler::MinFilter::LINEAR,
             TextureSampler::MagFilter::LINEAR,
             TextureSampler::WrapMode::REPEAT
         );
+        static const char* layerNames[6] = {
+            "layer0", "layer1", "layer2", "layer3", "layer4", "layer5"
+        };
+        for (size_t i = 0; i < 6; ++i) {
+            Texture* layer = key.texture ? key.texture->terrainLayers[i] : nullptr;
+            mi->setParameter(layerNames[i], layer ? layer : whiteTex, repeatSampler);
+        }
+        mi->setParameter("roughness", key.param1 > 0.0f ? key.param1 : 0.9f);
+        mi->setParameter("tileScale", key.param3 > 0.0f ? key.param3 : 0.25f);
+    } else {
+        TextureSampler repeatSampler(
+            TextureSampler::MinFilter::LINEAR_MIPMAP_LINEAR,
+            TextureSampler::MagFilter::LINEAR,
+            TextureSampler::WrapMode::REPEAT
+        );
 
+        mi->setParameter("baseColor", RgbaType::LINEAR, math::float4{key.r, key.g, key.b, 1.0f});
+        mi->setParameter("roughness", key.param1);
+        mi->setParameter("metallic",  key.param2);
+
+        float uvs = (key.param3 > 0.0f) ? key.param3 : 1.0f;
+        mi->setParameter("uvScale", math::float2{uvs, uvs});
+
+        // --- albedo ---
         if (key.texture && key.texture->tex) {
-            mi->setParameter("hasTexture", 1.0f);
-            mi->setParameter("baseColorMap", key.texture->tex, repeatSampler);
+            mi->setParameter("hasTexture",    1.0f);
+            mi->setParameter("baseColorMap",  key.texture->tex, repeatSampler);
         } else {
-            mi->setParameter("hasTexture", 0.0f);
-            mi->setParameter("baseColorMap", whiteTex, repeatSampler);
+            mi->setParameter("hasTexture",    0.0f);
+            mi->setParameter("baseColorMap",  whiteTex, repeatSampler);
         }
 
+        // --- normal map ---
         if (key.texture && key.texture->normalTex) {
             mi->setParameter("hasNormalMap", 1.0f);
-            mi->setParameter("normalMap", key.texture->normalTex, repeatSampler);
+            mi->setParameter("normalMap",    key.texture->normalTex, repeatSampler);
         } else {
             mi->setParameter("hasNormalMap", 0.0f);
-            mi->setParameter("normalMap", whiteTex, repeatSampler);
+            mi->setParameter("normalMap",    whiteTex, repeatSampler);
         }
 
+        // --- ORM map ---
         if (key.texture && key.texture->ormTex) {
             mi->setParameter("hasOrmMap", 1.0f);
-            mi->setParameter("ormMap", key.texture->ormTex, repeatSampler);
+            mi->setParameter("ormMap",    key.texture->ormTex, repeatSampler);
         } else {
             mi->setParameter("hasOrmMap", 0.0f);
-            mi->setParameter("ormMap", whiteTex, repeatSampler);
+            mi->setParameter("ormMap",    whiteTex, repeatSampler);
+        }
+
+        // --- height map / parallax ---
+        if (key.texture && key.texture->heightTex) {
+            mi->setParameter("hasHeightMap", 1.0f);
+            mi->setParameter("heightMap",    key.texture->heightTex, repeatSampler);
+            mi->setParameter("heightScale",  key.texture->heightScale);
+        } else {
+            mi->setParameter("hasHeightMap", 0.0f);
+            mi->setParameter("heightMap",    whiteTex, repeatSampler);
+            mi->setParameter("heightScale",  0.0f);
         }
     }
 }
@@ -1536,6 +1726,141 @@ static Box kine_compute_batch_bounds(
         bounds.unionSelf(rigidTransform(mesh->localBounds, transforms[i]));
     }
     return bounds;
+}
+
+static Box kine_compute_dynamic_batch_bounds(
+    const KineMesh* mesh,
+    const math::mat4f* transforms,
+    size_t count)
+{
+    constexpr float cellSize = 64.0f;
+    Box exact = kine_compute_batch_bounds(mesh, transforms, count);
+    const math::float3 minPoint = exact.center - exact.halfExtent;
+    const math::float3 maxPoint = exact.center + exact.halfExtent;
+    const math::float3 snappedMin{
+        std::floor(minPoint.x / cellSize) * cellSize,
+        std::floor(minPoint.y / cellSize) * cellSize,
+        std::floor(minPoint.z / cellSize) * cellSize,
+    };
+    const math::float3 snappedMax{
+        std::ceil(maxPoint.x / cellSize) * cellSize,
+        std::ceil(maxPoint.y / cellSize) * cellSize,
+        std::ceil(maxPoint.z / cellSize) * cellSize,
+    };
+    return Box{(snappedMin + snappedMax) * 0.5f, (snappedMax - snappedMin) * 0.5f};
+}
+
+static Material* kine_select_material(KineFilamentContext* ctx, int materialKind)
+{
+    if (materialKind == KINE_MAT_GLASS) return ctx->glassMaterial;
+    if (materialKind == KINE_MAT_NEON) return ctx->neonMaterial;
+    if (materialKind == KINE_MAT_WATER) return ctx->waterMaterial;
+    if (materialKind == KINE_MAT_OUTLINE) return ctx->outlineMaterial;
+    if (materialKind == KINE_MAT_GIZMO) return ctx->gizmoMaterial;
+    if (materialKind == KINE_MAT_PARTICLE) return ctx->particleMaterial;
+    if (materialKind == KINE_MAT_TERRAIN) return ctx->terrainMaterial;
+    return ctx->defaultMaterial;
+}
+
+static KineBatchKey kine_draw_item_key(const KineFilamentDrawItem& item, uint64_t streamId = 0)
+{
+    KineBatchKey key;
+    key.mesh = (KineMesh*)item.mesh;
+    key.streamId = streamId;
+    key.materialKind = item.materialKind;
+    key.r = item.r;
+    key.g = item.g;
+    key.b = item.b;
+    key.param1 = item.param1;
+    key.param2 = item.param2;
+    key.param3 = item.param3;
+    key.transmission = item.transmission;
+    key.castShadow = (item.flags & KINE_FILAMENT_DRAW_CAST_SHADOWS) != 0;
+    key.receiveShadow = (item.flags & KINE_FILAMENT_DRAW_RECEIVE_SHADOWS) != 0;
+    key.culling = (item.flags & KINE_FILAMENT_DRAW_CULLING) != 0;
+    key.texture = (KineTexHandle*)item.tex;
+    return key;
+}
+
+static math::mat4f kine_draw_item_transform(const KineFilamentDrawItem& item)
+{
+    const float* mat4 = item.transform;
+    return math::mat4f(
+        math::float4{mat4[0], mat4[4], mat4[8],  mat4[12]},
+        math::float4{mat4[1], mat4[5], mat4[9],  mat4[13]},
+        math::float4{mat4[2], mat4[6], mat4[10], mat4[14]},
+        math::float4{mat4[3], mat4[7], mat4[11], mat4[15]}
+    );
+}
+
+static void kine_destroy_instance_batch_chunks(KineFilamentInstanceBatch* batch)
+{
+    if (!batch || !batch->ctx || !batch->ctx->engine) return;
+    KineFilamentContext* ctx = batch->ctx;
+    for (KineBuiltBatch& chunk : batch->chunks) {
+        if (!chunk.entity.isNull()) {
+            ctx->scene->remove(chunk.entity);
+            ctx->engine->destroy(chunk.entity);
+            EntityManager::get().destroy(chunk.entity);
+        }
+        if (chunk.instanceBuffer) {
+            ctx->engine->destroy(chunk.instanceBuffer);
+        }
+    }
+    batch->chunks.clear();
+}
+
+static bool kine_rebuild_instance_batch(KineFilamentInstanceBatch* batch)
+{
+    if (!batch || !batch->ctx || !batch->ctx->engine || batch->transforms.empty()) return false;
+    KineFilamentContext* ctx = batch->ctx;
+    KineMesh* mesh = batch->key.mesh;
+    if (!mesh || !mesh->vb || !mesh->ib) return false;
+
+    Material* base = kine_select_material(ctx, batch->key.materialKind);
+    if (!base) return false;
+
+    if (!batch->matInst) {
+        batch->matInst = base->createInstance();
+    }
+    kine_apply_material_params(batch->matInst, batch->key, ctx->time, ctx->whiteTex);
+
+    kine_destroy_instance_batch_chunks(batch);
+
+    size_t maxInstances = ctx->engine->getMaxAutomaticInstances();
+    if (maxInstances == 0) maxInstances = 1;
+
+    size_t offset = 0;
+    while (offset < batch->transforms.size()) {
+        const size_t count = std::min(maxInstances, batch->transforms.size() - offset);
+        const math::mat4f* chunkTransforms = batch->transforms.data() + offset;
+        const Box bounds = kine_compute_dynamic_batch_bounds(mesh, chunkTransforms, count);
+
+        InstanceBuffer* instanceBuffer = InstanceBuffer::Builder(count).build(*ctx->engine);
+        instanceBuffer->setLocalTransforms(chunkTransforms, count, 0);
+
+        Entity entity = EntityManager::get().create();
+        RenderableManager::Builder renderableBuilder(1);
+        renderableBuilder.boundingBox(bounds)
+            .material(0, batch->matInst)
+            .geometry(0, RenderableManager::PrimitiveType::TRIANGLES, mesh->vb, mesh->ib, 0, mesh->indexCount)
+            .culling(batch->key.culling)
+            .receiveShadows(batch->key.receiveShadow)
+            .castShadows(batch->key.castShadow)
+            .instances(count, instanceBuffer);
+        if (batch->key.materialKind == KINE_MAT_GLASS) {
+            // Filament reserves channels 0/1 for the opaque scene copies used
+            // by screen-space refraction.
+            renderableBuilder.channel(2);
+        }
+        renderableBuilder.build(*ctx->engine, entity);
+
+        ctx->scene->addEntity(entity);
+        batch->chunks.push_back({entity, instanceBuffer, count});
+        offset += count;
+    }
+
+    return true;
 }
 
 static void kine_destroy_batch_chunks(
@@ -1595,11 +1920,7 @@ static void kine_update_batches(KineFilamentContext* ctx)
         KineMesh* m = key.mesh;
         if (!m->vb || !m->ib) continue;
 
-        Material* base = ctx->defaultMaterial;
-        if (key.materialKind == KINE_MAT_GLASS) base = ctx->glassMaterial;
-        if (key.materialKind == KINE_MAT_NEON)  base = ctx->neonMaterial;
-        if (key.materialKind == KINE_MAT_WATER) base = ctx->waterMaterial;
-        if (key.materialKind == KINE_MAT_OUTLINE) base = ctx->outlineMaterial;
+        Material* base = kine_select_material(ctx, key.materialKind);
         if (!base) continue;
 
         KinePersistentBatch& batch = ctx->builtBatches[key];
@@ -1639,15 +1960,18 @@ static void kine_update_batches(KineFilamentContext* ctx)
                 instanceBuffer->setLocalTransforms(chunkTransforms, count, 0);
 
                 Entity entity = EntityManager::get().create();
-                RenderableManager::Builder(1)
-                    .boundingBox(bounds)
+                RenderableManager::Builder renderableBuilder(1);
+                renderableBuilder.boundingBox(bounds)
                     .material(0, batch.matInst)
                     .geometry(0, RenderableManager::PrimitiveType::TRIANGLES, m->vb, m->ib, 0, m->indexCount)
                     .culling(key.culling)
                     .receiveShadows(key.receiveShadow)
                     .castShadows(key.castShadow)
-                    .instances(count, instanceBuffer)
-                    .build(*ctx->engine, entity);
+                    .instances(count, instanceBuffer);
+                if (key.materialKind == KINE_MAT_GLASS) {
+                    renderableBuilder.channel(2);
+                }
+                renderableBuilder.build(*ctx->engine, entity);
 
                 ctx->scene->addEntity(entity);
                 batch.chunks.push_back({entity, instanceBuffer, count});
@@ -1801,6 +2125,24 @@ static Material* buildOutlineMaterial(Engine* engine) {
         .build(*engine);
 }
 
+static Material* buildGizmoMaterial(Engine* engine) {
+    return Material::Builder()
+        .package(KINE_GIZMO_PACKAGE_KINE_GIZMO_DATA, KINE_GIZMO_PACKAGE_KINE_GIZMO_SIZE)
+        .build(*engine);
+}
+
+static Material* buildParticleMaterial(Engine* engine) {
+    return Material::Builder()
+        .package(KINE_PARTICLE_PACKAGE_KINE_PARTICLE_DATA, KINE_PARTICLE_PACKAGE_KINE_PARTICLE_SIZE)
+        .build(*engine);
+}
+
+static Material* buildTerrainMaterial(Engine* engine) {
+    return Material::Builder()
+        .package(KINE_TERRAIN_PACKAGE_KINE_TERRAIN_DATA, KINE_TERRAIN_PACKAGE_KINE_TERRAIN_SIZE)
+        .build(*engine);
+}
+
 static Texture* kine_create_uploaded_rgba_texture(
     Engine* engine,
     int width, int height,
@@ -1838,6 +2180,70 @@ static Texture* kine_create_uploaded_rgba_texture(
     tex->setImage(*engine, 0, 0, 0,
                   (uint32_t)width, (uint32_t)height, std::move(pb));
     return tex;
+}
+
+static QualityLevel kine_quality_from_int(int quality)
+{
+    switch (quality) {
+        case 0: return QualityLevel::LOW;
+        case 1: return QualityLevel::MEDIUM;
+        case 2: return QualityLevel::HIGH;
+        case 3: return QualityLevel::ULTRA;
+        default: return QualityLevel::MEDIUM;
+    }
+}
+
+static uint8_t kine_clamp_u8(int value, int minValue, int maxValue)
+{
+    return (uint8_t)std::clamp(value, minValue, maxValue);
+}
+
+static uint32_t kine_next_power_of_two(uint32_t value)
+{
+    if (value <= 8u) return 8u;
+    value--;
+    value |= value >> 1u;
+    value |= value >> 2u;
+    value |= value >> 4u;
+    value |= value >> 8u;
+    value |= value >> 16u;
+    value++;
+    return std::clamp(value, 8u, 8192u);
+}
+
+static LightManager::ShadowOptions kine_make_sun_shadow_options(
+    int mapSize,
+    int cascades,
+    float shadowFar,
+    float shadowNearHint,
+    float shadowFarHint,
+    bool stable,
+    bool contactShadows)
+{
+    LightManager::ShadowOptions options;
+    options.mapSize = kine_next_power_of_two((uint32_t)std::max(mapSize, 8));
+    options.shadowCascades = kine_clamp_u8(cascades, 1, 4);
+    LightManager::ShadowCascades::computePracticalSplits(
+        options.cascadeSplitPositions,
+        options.shadowCascades,
+        1.0f,
+        std::max(shadowFar > 0.0f ? shadowFar : shadowFarHint, 2.0f),
+        0.65f);
+    options.shadowFar = std::max(shadowFar, 0.0f);
+    options.shadowNearHint = std::max(shadowNearHint, 0.001f);
+    options.shadowFarHint = std::max(shadowFarHint, options.shadowNearHint + 0.001f);
+    options.stable = stable;
+    options.lispsm = !stable;
+    // Values below Filament's recommended PCF defaults cause the receiver to
+    // shadow itself, especially on large, nearly coplanar parts (shadow acne).
+    options.constantBias = 0.004f;
+    options.normalBias = 1.25f;
+    options.polygonOffsetConstant = 0.75f;
+    options.polygonOffsetSlope = 2.5f;
+    options.screenSpaceContactShadows = contactShadows;
+    options.stepCount = 16;
+    options.maxShadowDistance = 0.75f;
+    return options;
 }
 
 extern "C" {
@@ -1954,7 +2360,7 @@ static KineFilamentContext* Kine_Filament_CreateInternal(
 
     ctx->view->setScene(ctx->scene);
     ctx->view->setCamera(ctx->camera);
-    ctx->view->setPostProcessingEnabled(false);
+    ctx->view->setPostProcessingEnabled(true);
 
     Renderer::ClearOptions clearOptions;
     clearOptions.clearColor = ctx->skyColor;
@@ -1968,6 +2374,11 @@ static KineFilamentContext* Kine_Filament_CreateInternal(
     ctx->waterMaterial = buildWaterMaterial(ctx->engine);
     ctx->decalMaterial = buildDecalMaterial(ctx->engine);
     ctx->outlineMaterial = buildOutlineMaterial(ctx->engine);
+    ctx->gizmoMaterial = buildGizmoMaterial(ctx->engine);
+    ctx->particleMaterial = buildParticleMaterial(ctx->engine);
+    ctx->terrainMaterial = buildTerrainMaterial(ctx->engine);
+    ctx->particleQuadMesh = buildParticleQuad();
+    uploadMesh(ctx->particleQuadMesh, ctx->engine);
 
     static const uint8_t whitePixel[4] = {255, 255, 255, 255};
     ctx->whiteTex = Texture::Builder()
@@ -1986,6 +2397,7 @@ static KineFilamentContext* Kine_Filament_CreateInternal(
         .intensity(100000.0f)
         .direction(sunDir)
         .sunAngularRadius(1.9f)
+        .shadowOptions(kine_make_sun_shadow_options(4096, 4, 0.0f, 0.5f, 160.0f, true, true))
         .castShadows(true)
         .build(*ctx->engine, ctx->sunLight);
     ctx->scene->addEntity(ctx->sunLight);
@@ -2136,7 +2548,310 @@ KINE_API void Kine_Filament_CreateSky(KineFilamentContext* ctx, float r, float g
 
 KINE_API void Kine_Filament_SetPostProcessing(KineFilamentContext* ctx, bool enabled)
 {
+    if (!ctx || !ctx->view) return;
     ctx->view->setPostProcessingEnabled(enabled);
+}
+
+KINE_API void Kine_Filament_SetBloom(
+    KineFilamentContext* ctx,
+    bool enabled,
+    float strength,
+    int resolution,
+    int levels,
+    bool threshold,
+    bool lensFlare)
+{
+    if (!ctx || !ctx->view) return;
+
+    BloomOptions options = ctx->view->getBloomOptions();
+    options.enabled = enabled;
+    options.strength = std::clamp(strength, 0.0f, 1.0f);
+    options.resolution = (uint32_t)std::clamp(resolution, 8, 4096);
+    options.levels = kine_clamp_u8(levels, 1, 11);
+    options.threshold = threshold;
+    options.lensFlare = lensFlare;
+    ctx->view->setBloomOptions(options);
+}
+
+KINE_API void Kine_Filament_SetAmbientOcclusion(
+    KineFilamentContext* ctx,
+    bool enabled,
+    float radius,
+    float power,
+    float intensity,
+    int quality,
+    int aoType)
+{
+    if (!ctx || !ctx->view) return;
+
+    AmbientOcclusionOptions options = ctx->view->getAmbientOcclusionOptions();
+    options.enabled = enabled;
+    options.radius = std::clamp(radius, 0.0f, 10.0f);
+    options.power = std::max(power, 0.001f);
+    options.intensity = std::max(intensity, 0.0f);
+    options.quality = kine_quality_from_int(quality);
+    options.aoType = aoType == 1
+        ? AmbientOcclusionOptions::AmbientOcclusionType::GTAO
+        : AmbientOcclusionOptions::AmbientOcclusionType::SAO;
+    ctx->view->setAmbientOcclusionOptions(options);
+}
+
+KINE_API void Kine_Filament_SetAntiAliasing(
+    KineFilamentContext* ctx,
+    bool fxaa,
+    bool taa,
+    bool msaa,
+    int sampleCount)
+{
+    if (!ctx || !ctx->view) return;
+
+    ctx->view->setAntiAliasing(fxaa ? AntiAliasing::FXAA : AntiAliasing::NONE);
+
+    TemporalAntiAliasingOptions taaOptions = ctx->view->getTemporalAntiAliasingOptions();
+    taaOptions.enabled = taa;
+    ctx->view->setTemporalAntiAliasingOptions(taaOptions);
+
+    MultiSampleAntiAliasingOptions msaaOptions = ctx->view->getMultiSampleAntiAliasingOptions();
+    msaaOptions.enabled = msaa;
+    msaaOptions.sampleCount = kine_clamp_u8(sampleCount, 1, 8);
+    ctx->view->setMultiSampleAntiAliasingOptions(msaaOptions);
+}
+
+KINE_API void Kine_Filament_SetDynamicResolution(
+    KineFilamentContext* ctx,
+    bool enabled,
+    float minScale,
+    float maxScale,
+    int quality,
+    float sharpness)
+{
+    if (!ctx || !ctx->view) return;
+
+    minScale = std::clamp(minScale, 0.1f, 1.0f);
+    maxScale = std::clamp(maxScale, minScale, 2.0f);
+
+    DynamicResolutionOptions options = ctx->view->getDynamicResolutionOptions();
+    options.enabled = enabled;
+    options.minScale = {minScale, minScale};
+    options.maxScale = {maxScale, maxScale};
+    options.quality = kine_quality_from_int(quality);
+    options.sharpness = std::clamp(sharpness, 0.0f, 1.0f);
+    options.homogeneousScaling = true;
+    ctx->view->setDynamicResolutionOptions(options);
+}
+
+KINE_API void Kine_Filament_SetDepthOfField(
+    KineFilamentContext* ctx,
+    bool enabled,
+    float cocScale,
+    float cocAspectRatio,
+    float maxApertureDiameter,
+    int maxForegroundCOC,
+    int maxBackgroundCOC)
+{
+    if (!ctx || !ctx->view) return;
+
+    DepthOfFieldOptions options = ctx->view->getDepthOfFieldOptions();
+    options.enabled = enabled;
+    options.cocScale = std::max(cocScale, 0.0f);
+    options.cocAspectRatio = std::max(cocAspectRatio, 0.001f);
+    options.maxApertureDiameter = std::max(maxApertureDiameter, 0.0f);
+    options.maxForegroundCOC = (uint16_t)std::clamp(maxForegroundCOC, 0, 32);
+    options.maxBackgroundCOC = (uint16_t)std::clamp(maxBackgroundCOC, 0, 32);
+    ctx->view->setDepthOfFieldOptions(options);
+}
+
+KINE_API void Kine_Filament_SetFocusDistance(KineFilamentContext* ctx, float distance)
+{
+    if (!ctx || !ctx->camera) return;
+    ctx->camera->setFocusDistance(std::max(distance, 0.001f));
+}
+
+KINE_API void Kine_Filament_SetVignette(
+    KineFilamentContext* ctx,
+    bool enabled,
+    float midPoint,
+    float roundness,
+    float feather,
+    float r,
+    float g,
+    float b,
+    float a)
+{
+    if (!ctx || !ctx->view) return;
+
+    VignetteOptions options = ctx->view->getVignetteOptions();
+    options.enabled = enabled;
+    options.midPoint = std::clamp(midPoint, 0.0f, 1.0f);
+    options.roundness = std::clamp(roundness, 0.0f, 1.0f);
+    options.feather = std::clamp(feather, 0.0f, 1.0f);
+    options.color = {
+        std::max(r, 0.0f),
+        std::max(g, 0.0f),
+        std::max(b, 0.0f),
+        std::clamp(a, 0.0f, 1.0f),
+    };
+    ctx->view->setVignetteOptions(options);
+}
+
+KINE_API void Kine_Filament_SetScreenSpaceReflections(
+    KineFilamentContext* ctx,
+    bool enabled,
+    float thickness,
+    float bias,
+    float maxDistance,
+    float stride)
+{
+    if (!ctx || !ctx->view) return;
+
+    ScreenSpaceReflectionsOptions options = ctx->view->getScreenSpaceReflectionsOptions();
+    options.enabled = enabled;
+    options.thickness = std::max(thickness, 0.0f);
+    options.bias = std::max(bias, 0.0f);
+    options.maxDistance = std::max(maxDistance, 0.0f);
+    options.stride = std::max(stride, 0.001f);
+    ctx->view->setScreenSpaceReflectionsOptions(options);
+}
+
+KINE_API void Kine_Filament_SetColorGrading(
+    KineFilamentContext* ctx,
+    float exposure,
+    float contrast,
+    float saturation,
+    float vibrance,
+    float temperature,
+    float tint)
+{
+    if (!ctx || !ctx->engine || !ctx->view) return;
+
+    ColorGrading* grading = ColorGrading::Builder()
+        .exposure(exposure)
+        .contrast(std::max(contrast, 0.001f))
+        .saturation(std::max(saturation, 0.0f))
+        .vibrance(std::max(vibrance, 0.0f))
+        .whiteBalance(temperature, tint)
+        .build(*ctx->engine);
+
+    if (!grading) return;
+
+    if (ctx->colorGrading) {
+        ctx->view->setColorGrading(nullptr);
+        ctx->engine->destroy(ctx->colorGrading);
+    }
+    ctx->colorGrading = grading;
+    ctx->view->setColorGrading(ctx->colorGrading);
+}
+
+KINE_API void Kine_Filament_ClearColorGrading(KineFilamentContext* ctx)
+{
+    if (!ctx || !ctx->engine || !ctx->view || !ctx->colorGrading) return;
+
+    ctx->view->setColorGrading(nullptr);
+    ctx->engine->destroy(ctx->colorGrading);
+    ctx->colorGrading = nullptr;
+}
+
+KINE_API void Kine_Filament_SetRenderQuality(KineFilamentContext* ctx, int hdrQuality)
+{
+    if (!ctx || !ctx->view) return;
+
+    RenderQuality quality = ctx->view->getRenderQuality();
+    quality.hdrColorBuffer = kine_quality_from_int(hdrQuality);
+    ctx->view->setRenderQuality(quality);
+}
+
+KINE_API void Kine_Filament_SetDithering(KineFilamentContext* ctx, bool enabled)
+{
+    if (!ctx || !ctx->view) return;
+    ctx->view->setDithering(enabled ? Dithering::TEMPORAL : Dithering::NONE);
+}
+
+KINE_API void Kine_Filament_SetShadowOptions(KineFilamentContext* ctx, bool enabled, int shadowType)
+{
+    if (!ctx || !ctx->view) return;
+
+    ctx->view->setShadowingEnabled(enabled);
+    switch (shadowType) {
+        case 1:
+            ctx->view->setShadowType(ShadowType::VSM);
+            break;
+        case 2:
+            ctx->view->setShadowType(ShadowType::DPCF);
+            break;
+        case 3:
+            ctx->view->setShadowType(ShadowType::PCSS);
+            break;
+        default:
+            ctx->view->setShadowType(ShadowType::PCF);
+            break;
+    }
+}
+
+KINE_API void Kine_Filament_SetSunShadowOptions(
+    KineFilamentContext* ctx,
+    int mapSize,
+    int cascades,
+    float shadowFar,
+    float shadowNearHint,
+    float shadowFarHint,
+    bool stable,
+    bool contactShadows)
+{
+    if (!ctx || !ctx->engine || ctx->sunLight.isNull()) return;
+
+    auto& lm = ctx->engine->getLightManager();
+    auto inst = lm.getInstance(ctx->sunLight);
+    if (!inst.isValid()) return;
+
+    lm.setShadowOptions(
+        inst,
+        kine_make_sun_shadow_options(
+            mapSize,
+            cascades,
+            shadowFar,
+            shadowNearHint,
+            shadowFarHint,
+            stable,
+            contactShadows));
+}
+
+KINE_API void Kine_Filament_SetSunRays(
+    KineFilamentContext* ctx,
+    bool enabled,
+    float distance,
+    float cutOffDistance,
+    float maximumOpacity,
+    float height,
+    float heightFalloff,
+    float density,
+    float inScatteringStart,
+    float inScatteringSize,
+    float r,
+    float g,
+    float b,
+    bool fogColorFromIbl)
+{
+    if (!ctx || !ctx->view) return;
+
+    FogOptions options = ctx->view->getFogOptions();
+    options.enabled = enabled;
+    options.distance = std::max(distance, 0.0f);
+    options.cutOffDistance = cutOffDistance > 0.0f
+        ? std::max(cutOffDistance, options.distance)
+        : std::numeric_limits<float>::infinity();
+    options.maximumOpacity = std::clamp(maximumOpacity, 0.0f, 1.0f);
+    options.height = height;
+    options.heightFalloff = std::max(heightFalloff, 0.0f);
+    options.density = std::max(density, 0.0f);
+    options.inScatteringStart = std::max(inScatteringStart, 0.0f);
+    options.inScatteringSize = enabled ? std::max(inScatteringSize, 0.001f) : -1.0f;
+    options.color = {
+        std::max(r, 0.0f),
+        std::max(g, 0.0f),
+        std::max(b, 0.0f),
+    };
+    options.fogColorFromIbl = fogColorFromIbl;
+    ctx->view->setFogOptions(options);
 }
 
 // ---------------------------------------------------------------------------
@@ -2437,16 +3152,33 @@ KINE_API void Kine_Filament_Destroy(KineFilamentContext* ctx)
             ctx->engine->destroy(ctx->skyTexture);
             ctx->skyTexture = nullptr;
         }
+        if (ctx->colorGrading) {
+            if (ctx->view) {
+                ctx->view->setColorGrading(nullptr);
+            }
+            ctx->engine->destroy(ctx->colorGrading);
+            ctx->colorGrading = nullptr;
+        }
         if (ctx->renderTarget)  ctx->engine->destroy(ctx->renderTarget);
         if (ctx->colorTarget)   ctx->engine->destroy(ctx->colorTarget);
         if (ctx->depthTarget)   ctx->engine->destroy(ctx->depthTarget);
         if (ctx->whiteTex)      ctx->engine->destroy(ctx->whiteTex);
+        if (ctx->particleQuadMesh) {
+            kine_invalidate_batches(ctx, ctx->particleQuadMesh, nullptr);
+            if (ctx->particleQuadMesh->vb) ctx->engine->destroy(ctx->particleQuadMesh->vb);
+            if (ctx->particleQuadMesh->ib) ctx->engine->destroy(ctx->particleQuadMesh->ib);
+            delete ctx->particleQuadMesh;
+            ctx->particleQuadMesh = nullptr;
+        }
         if (ctx->defaultMaterial) ctx->engine->destroy(ctx->defaultMaterial);
         if (ctx->neonMaterial)    ctx->engine->destroy(ctx->neonMaterial);
         if (ctx->glassMaterial)   ctx->engine->destroy(ctx->glassMaterial);
         if (ctx->waterMaterial)   ctx->engine->destroy(ctx->waterMaterial);
         if (ctx->decalMaterial)   ctx->engine->destroy(ctx->decalMaterial);
         if (ctx->outlineMaterial) ctx->engine->destroy(ctx->outlineMaterial);
+        if (ctx->gizmoMaterial)   ctx->engine->destroy(ctx->gizmoMaterial);
+        if (ctx->particleMaterial) ctx->engine->destroy(ctx->particleMaterial);
+        if (ctx->terrainMaterial) ctx->engine->destroy(ctx->terrainMaterial);
         if (ctx->colorTextureId) {
 #if !KINE_FILAMENT_USE_VULKAN
             GLuint id = (GLuint)ctx->colorTextureId;
@@ -3051,6 +3783,34 @@ KineFilamentMesh* Kine_Filament_CreateCustomMesh(
     return (KineFilamentMesh*)m;
 }
 
+KINE_API KineFilamentMesh* Kine_Filament_CreateTerrainMesh(
+    KineFilamentContext* ctx,
+    const float* vertexData,
+    const float* materialWeights,
+    int vertexCount,
+    const uint16_t* indices,
+    int indexCount)
+{
+    if (!ctx || !ctx->engine || !vertexData || !materialWeights || vertexCount <= 0 ||
+        !indices || indexCount <= 0) {
+        return nullptr;
+    }
+    if (vertexCount > 65535) {
+        fprintf(stderr, "[Kine] CreateTerrainMesh: %d verts exceeds uint16 index range\n", vertexCount);
+        return nullptr;
+    }
+
+    auto* m = new KineMesh();
+    m->vertices.resize(vertexCount);
+    memcpy(m->vertices.data(), vertexData, vertexCount * sizeof(KineVertex));
+    m->terrainWeights.resize(vertexCount);
+    memcpy(m->terrainWeights.data(), materialWeights, vertexCount * sizeof(KineTerrainWeights));
+    m->indices.assign(indices, indices + indexCount);
+    m->indexCount = (uint32_t)indexCount;
+    uploadMesh(m, ctx->engine);
+    return (KineFilamentMesh*)m;
+}
+
 bool Kine_Filament_UpdateCustomMesh(
     KineFilamentContext* ctx,
     KineFilamentMesh* mesh,
@@ -3075,7 +3835,9 @@ bool Kine_Filament_UpdateCustomMesh(
         std::numeric_limits<float>::lowest(),
         std::numeric_limits<float>::lowest()
     };
+    std::vector<math::float3> positions(m->vertices.size());
     std::vector<math::float3> normals(m->vertices.size());
+    std::vector<math::float2> uvs(m->vertices.size());
     for (size_t i = 0; i < m->vertices.size(); ++i) {
         const KineVertex& vertex = m->vertices[i];
         boundsMin.x = std::min(boundsMin.x, vertex.px);
@@ -3084,7 +3846,9 @@ bool Kine_Filament_UpdateCustomMesh(
         boundsMax.x = std::max(boundsMax.x, vertex.px);
         boundsMax.y = std::max(boundsMax.y, vertex.py);
         boundsMax.z = std::max(boundsMax.z, vertex.pz);
+        positions[i] = {vertex.px, vertex.py, vertex.pz};
         normals[i] = {vertex.nx, vertex.ny, vertex.nz};
+        uvs[i] = {vertex.u, vertex.v};
     }
     m->localBounds.set(boundsMin, boundsMax);
 
@@ -3092,7 +3856,19 @@ bool Kine_Filament_UpdateCustomMesh(
     auto orientation = SurfaceOrientation::Builder()
         .vertexCount((uint32_t)m->vertices.size())
         .normals(normals.data())
+        .uvs(uvs.data())
+        .positions(positions.data())
+        .triangleCount(m->indices.size() / 3)
+        .triangles(reinterpret_cast<const math::ushort3*>(m->indices.data()))
         .build();
+    if (!orientation) {
+        fprintf(stderr, "[Kine] UV tangent regeneration failed; using normal-derived frames\n");
+        orientation = SurfaceOrientation::Builder()
+            .vertexCount((uint32_t)m->vertices.size())
+            .normals(normals.data())
+            .build();
+        if (!orientation) return false;
+    }
     orientation->getQuats(quats.data(), (uint32_t)m->vertices.size());
     delete orientation;
 
@@ -3159,6 +3935,8 @@ KINE_API KineFilamentMesh* Kine_Filament_CreateMesh(KineFilamentContext* ctx, in
         case 10: m = buildMoveGizmo(); break;
         case 11: m = buildRotateGizmo(); break;
         case 12: m = buildScaleGizmo(); break;
+        case 5:  m = buildDisplacedCube(); break;
+        case 4:  m = buildParticleQuad(); break;
         case 2:  m = buildSphere(); break;
         case 3:  m = buildPyramid(); break;
         default: m = buildCube();   break; // 1 = cube (default)
@@ -3198,6 +3976,36 @@ KINE_API KineFilamentTex* Kine_Filament_CreateTexFromPixels(
     return (KineFilamentTex*)th;
 }
 
+KINE_API bool Kine_Filament_UpdateTexFromPixels(
+    KineFilamentContext* ctx,
+    KineFilamentTex* tex,
+    int width, int height,
+    int rowBytes,
+    const void* pixelsRGBA8)
+{
+    if (!ctx || !ctx->engine || !tex || !pixelsRGBA8 || width <= 0 || height <= 0 || rowBytes < width * 4)
+        return false;
+
+    auto* th = (KineTexHandle*)tex;
+    if (!th->tex || th->tex->getWidth(0) != (uint32_t)width || th->tex->getHeight(0) != (uint32_t)height)
+        return false;
+
+    const size_t bytes = (size_t)rowBytes * (size_t)height;
+    uint8_t* copy = (uint8_t*)malloc(bytes);
+    if (!copy) return false;
+    memcpy(copy, pixelsRGBA8, bytes);
+
+    Texture::PixelBufferDescriptor pb(
+        copy, bytes,
+        Texture::Format::RGBA, Texture::Type::UBYTE,
+        /*alignment*/ 1, /*left*/ 0, /*top*/ 0, /*stride*/ (uint32_t)(rowBytes / 4),
+        [](void* buffer, size_t, void*) { free(buffer); });
+
+    th->tex->setImage(*ctx->engine, 0, 0, 0,
+                      (uint32_t)width, (uint32_t)height, std::move(pb));
+    return true;
+}
+
 KINE_API KineFilamentTex* Kine_Filament_CreatePbrTexFromPixels(
     KineFilamentContext* ctx,
     int width, int height,
@@ -3208,7 +4016,11 @@ KINE_API KineFilamentTex* Kine_Filament_CreatePbrTexFromPixels(
     const void* normalRGBA8,
     int ormWidth, int ormHeight,
     int ormRowBytes,
-    const void* ormRGBA8)
+    const void* ormRGBA8,
+    int heightWidth, int heightHeight,
+    int heightRowBytes,
+    const void* heightRGBA8,
+    float heightScale)
 {
     if (!ctx || !ctx->engine) return nullptr;
 
@@ -3223,8 +4035,32 @@ KINE_API KineFilamentTex* Kine_Filament_CreatePbrTexFromPixels(
         ctx->engine, normalWidth, normalHeight, normalRowBytes, normalRGBA8);
     th->ormTex = kine_create_uploaded_rgba_texture(
         ctx->engine, ormWidth, ormHeight, ormRowBytes, ormRGBA8);
+    th->heightTex = kine_create_uploaded_rgba_texture(
+        ctx->engine, heightWidth, heightHeight, heightRowBytes, heightRGBA8);
+    th->heightScale = heightScale;
 
     return (KineFilamentTex*)th;
+}
+
+KINE_API KineFilamentTex* Kine_Filament_CreateTerrainTextureSet(
+    KineFilamentContext* ctx,
+    KineFilamentTex* layer0,
+    KineFilamentTex* layer1,
+    KineFilamentTex* layer2,
+    KineFilamentTex* layer3,
+    KineFilamentTex* layer4,
+    KineFilamentTex* layer5)
+{
+    if (!ctx || !ctx->engine) return nullptr;
+
+    KineFilamentTex* layers[6] = {layer0, layer1, layer2, layer3, layer4, layer5};
+    auto* set = new KineTexHandle();
+    set->ownsTextures = false;
+    for (size_t i = 0; i < 6; ++i) {
+        auto* source = (KineTexHandle*)layers[i];
+        set->terrainLayers[i] = source ? source->tex : nullptr;
+    }
+    return (KineFilamentTex*)set;
 }
 
 KINE_API void Kine_Filament_DestroyMesh(KineFilamentContext* ctx, KineFilamentMesh* mesh)
@@ -3272,9 +4108,12 @@ KINE_API void Kine_Filament_DestroyTex(KineFilamentContext* ctx, KineFilamentTex
     if (!ctx || !tex) return;
     auto* th = (KineTexHandle*)tex;
     kine_invalidate_batches(ctx, nullptr, th);
-    if (th->tex) ctx->engine->destroy(th->tex);
-    if (th->normalTex) ctx->engine->destroy(th->normalTex);
-    if (th->ormTex) ctx->engine->destroy(th->ormTex);
+    if (th->ownsTextures) {
+        if (th->tex) ctx->engine->destroy(th->tex);
+        if (th->normalTex) ctx->engine->destroy(th->normalTex);
+        if (th->ormTex) ctx->engine->destroy(th->ormTex);
+        if (th->heightTex) ctx->engine->destroy(th->heightTex);
+    }
     delete th;
 }
 
@@ -3309,6 +4148,7 @@ static void kine_queue_mesh(
     bool culling,
     KineFilamentTex* tex,
     uint64_t streamId = 0,
+    float particleUvOffsetY = 0.0f,
     KineBatchKey* outKey = nullptr)
 {
     if (!ctx || !mesh || !mat4) return;
@@ -3320,6 +4160,7 @@ static void kine_queue_mesh(
     key.r = r; key.g = g; key.b = b;
     key.param1 = param1; key.param2 = param2; key.param3 = param3;
     key.transmission  = transmission;
+    key.particleUvOffsetY = particleUvOffsetY;
     key.castShadow    = castShadow;
     key.receiveShadow = receiveShadow;
     key.culling       = culling;
@@ -3394,6 +4235,52 @@ KINE_API void Kine_Filament_DrawMeshList(
 
 }
 
+KINE_API void Kine_Filament_DrawParticles(
+    KineFilamentContext* ctx,
+    KineFilamentTex* texture,
+    const KineFilamentParticleItem* items,
+    uint32_t itemCount,
+    float uvScaleX,
+    float uvScaleY,
+    float uvOffsetX,
+    float uvOffsetY,
+    bool castShadows,
+    bool culling)
+{
+    static_assert(sizeof(KineFilamentParticleItem) == 68,
+        "KineFilamentParticleItem ABI must match filament/funcs.luau");
+    static_assert(offsetof(KineFilamentParticleItem, r) == 64,
+        "KineFilamentParticleItem color offset must match filament/funcs.luau");
+
+    if (!ctx || !ctx->particleQuadMesh || !items || itemCount == 0) return;
+
+    const float sx = uvScaleX > 0.0f ? uvScaleX : 1.0f;
+    const float sy = uvScaleY > 0.0f ? uvScaleY : 1.0f;
+    for (uint32_t i = 0; i < itemCount; ++i) {
+        const KineFilamentParticleItem& item = items[i];
+        if (item.a == 0) continue;
+
+        kine_queue_mesh(
+            ctx,
+            reinterpret_cast<KineFilamentMesh*>(ctx->particleQuadMesh),
+            KINE_MAT_PARTICLE,
+            item.r / 255.0f,
+            item.g / 255.0f,
+            item.b / 255.0f,
+            sx,
+            sy,
+            uvOffsetX,
+            item.a / 255.0f,
+            item.transform,
+            castShadows,
+            false,
+            culling,
+            texture,
+            0,
+            uvOffsetY);
+    }
+}
+
 KINE_API void Kine_Filament_DrawMeshListVersioned(
     KineFilamentContext* ctx,
     const KineFilamentDrawItem* items,
@@ -3433,10 +4320,115 @@ KINE_API void Kine_Filament_DrawMeshListVersioned(
             (item.flags & KINE_FILAMENT_DRAW_CULLING) != 0,
             item.tex,
             streamId,
+            0.0f,
             &key);
         if (uniqueKeys.insert(key).second) {
             state.keys.push_back(key);
         }
+    }
+}
+
+KINE_API KineFilamentInstanceBatch* Kine_Filament_CreateInstanceBatch(
+    KineFilamentContext* ctx,
+    const KineFilamentDrawItem* items,
+    uint32_t itemCount)
+{
+    if (!ctx || !ctx->engine || !items || itemCount == 0) return nullptr;
+
+    KineBatchKey key = kine_draw_item_key(items[0]);
+    if (!key.mesh) return nullptr;
+
+    auto* batch = new KineFilamentInstanceBatch();
+    batch->ctx = ctx;
+    batch->key = key;
+    batch->transforms.reserve(itemCount);
+
+    for (uint32_t i = 0; i < itemCount; ++i) {
+        const KineBatchKey itemKey = kine_draw_item_key(items[i]);
+        if (!(itemKey == key)) {
+            delete batch;
+            return nullptr;
+        }
+        batch->transforms.push_back(kine_draw_item_transform(items[i]));
+    }
+
+    if (!kine_rebuild_instance_batch(batch)) {
+        Kine_Filament_DestroyInstanceBatch(batch);
+        return nullptr;
+    }
+
+    return batch;
+}
+
+KINE_API void Kine_Filament_DestroyInstanceBatch(KineFilamentInstanceBatch* batch)
+{
+    if (!batch) return;
+    kine_destroy_instance_batch_chunks(batch);
+    if (batch->ctx && batch->ctx->engine && batch->matInst) {
+        batch->ctx->engine->destroy(batch->matInst);
+    }
+    delete batch;
+}
+
+KINE_API void Kine_Filament_UpdateInstanceTransforms(
+    KineFilamentInstanceBatch* batch,
+    const uint32_t* indices,
+    const float* transforms,
+    uint32_t dirtyCount)
+{
+    if (!batch || !batch->ctx || !batch->ctx->engine || !indices || !transforms || dirtyCount == 0) return;
+
+    size_t maxInstances = batch->ctx->engine->getMaxAutomaticInstances();
+    if (maxInstances == 0) maxInstances = 1;
+
+    std::vector<uint32_t> dirtyIndices;
+    dirtyIndices.reserve(dirtyCount);
+
+    for (uint32_t i = 0; i < dirtyCount; ++i) {
+        const uint32_t index = indices[i];
+        if (index >= batch->transforms.size()) continue;
+
+        const float* mat4 = transforms + ((size_t)i * 16);
+        batch->transforms[index] = math::mat4f(
+            math::float4{mat4[0], mat4[4], mat4[8],  mat4[12]},
+            math::float4{mat4[1], mat4[5], mat4[9],  mat4[13]},
+            math::float4{mat4[2], mat4[6], mat4[10], mat4[14]},
+            math::float4{mat4[3], mat4[7], mat4[11], mat4[15]}
+        );
+        dirtyIndices.push_back(index);
+    }
+
+    if (dirtyIndices.empty()) return;
+
+    std::sort(dirtyIndices.begin(), dirtyIndices.end());
+    dirtyIndices.erase(std::unique(dirtyIndices.begin(), dirtyIndices.end()), dirtyIndices.end());
+
+    size_t pos = 0;
+    while (pos < dirtyIndices.size()) {
+        const uint32_t first = dirtyIndices[pos];
+        const size_t chunkIndex = first / maxInstances;
+        const size_t chunkBase = chunkIndex * maxInstances;
+        uint32_t last = first;
+        pos++;
+
+        while (pos < dirtyIndices.size()) {
+            const uint32_t next = dirtyIndices[pos];
+            if (next != last + 1 || next / maxInstances != chunkIndex) {
+                break;
+            }
+            last = next;
+            pos++;
+        }
+
+        if (chunkIndex >= batch->chunks.size()) continue;
+        KineBuiltBatch& chunk = batch->chunks[chunkIndex];
+        if (!chunk.instanceBuffer) continue;
+
+        const size_t count = (size_t)last - (size_t)first + 1;
+        chunk.instanceBuffer->setLocalTransforms(
+            batch->transforms.data() + first,
+            count,
+            first - chunkBase);
     }
 }
 
@@ -3459,6 +4451,8 @@ KINE_API void Kine_Filament_DrawMeshOutline(
         nullptr);
 }
 
+} // extern "C"
+
 static void kine_gizmo_axis_color(int axis, float& r, float& g, float& b)
 {
     switch (axis) {
@@ -3468,6 +4462,152 @@ static void kine_gizmo_axis_color(int axis, float& r, float& g, float& b)
         case KINE_GIZMO_AXIS_CENTER: r = 0.85f; g = 0.85f; b = 0.85f; break;
         default:                     r = 1.00f; g = 1.00f; b = 1.00f; break;
     }
+}
+
+struct KineGizmoScreenPoint {
+    double x = 0.0;
+    double y = 0.0;
+    bool valid = false;
+};
+
+static math::mat4 kine_gizmo_model_matrix(const float* mat4)
+{
+    return math::mat4(
+        math::double4{mat4[0], mat4[4], mat4[8],  mat4[12]},
+        math::double4{mat4[1], mat4[5], mat4[9],  mat4[13]},
+        math::double4{mat4[2], mat4[6], mat4[10], mat4[14]},
+        math::double4{mat4[3], mat4[7], mat4[11], mat4[15]});
+}
+
+static KineGizmoScreenPoint kine_gizmo_project(
+    KineFilamentContext* ctx,
+    const math::mat4& model,
+    const math::double3& point)
+{
+    KineGizmoScreenPoint result;
+    if (!ctx || !ctx->camera) return result;
+
+    const math::double4 clip = ctx->camera->getProjectionMatrix() *
+        ctx->camera->getViewMatrix() * model * math::double4{point, 1.0};
+    if (clip.w <= 1e-8) return result;
+
+    const double ndcX = clip.x / clip.w;
+    const double ndcY = clip.y / clip.w;
+    const int viewportX = ctx->viewportWidth > 0 ? ctx->viewportX : 0;
+    const int viewportY = ctx->viewportHeight > 0 ? ctx->viewportY : 0;
+    const int viewportWidth = ctx->viewportWidth > 0 ? ctx->viewportWidth : ctx->width;
+    const int viewportHeight = ctx->viewportHeight > 0 ? ctx->viewportHeight : ctx->height;
+    result.x = viewportX + (ndcX * 0.5 + 0.5) * viewportWidth;
+    result.y = viewportY + (1.0 - (ndcY * 0.5 + 0.5)) * viewportHeight;
+    result.valid = true;
+    return result;
+}
+
+static double kine_gizmo_segment_distance(
+    double px, double py,
+    const KineGizmoScreenPoint& a,
+    const KineGizmoScreenPoint& b)
+{
+    if (!a.valid || !b.valid) return std::numeric_limits<double>::max();
+    const double vx = b.x - a.x;
+    const double vy = b.y - a.y;
+    const double lengthSquared = vx * vx + vy * vy;
+    if (lengthSquared <= 1e-8) return std::hypot(px - a.x, py - a.y);
+    const double t = std::clamp(((px - a.x) * vx + (py - a.y) * vy) / lengthSquared, 0.0, 1.0);
+    return std::hypot(px - (a.x + vx * t), py - (a.y + vy * t));
+}
+
+static math::double3 kine_gizmo_axis_point(int axis, double distance)
+{
+    if (axis == KINE_GIZMO_AXIS_X) return {distance, 0.0, 0.0};
+    if (axis == KINE_GIZMO_AXIS_Y) return {0.0, distance, 0.0};
+    return {0.0, 0.0, distance};
+}
+
+extern "C" {
+
+KINE_API int Kine_Filament_PickGizmo(
+    KineFilamentContext* ctx,
+    KineFilamentGizmo* gizmo,
+    float* mat4,
+    float screenX,
+    float screenY)
+{
+    if (!ctx || !ctx->camera || !gizmo || !mat4) return KINE_GIZMO_AXIS_NONE;
+
+    const math::mat4 model = kine_gizmo_model_matrix(mat4);
+    const KineGizmoScreenPoint center = kine_gizmo_project(ctx, model, {0.0, 0.0, 0.0});
+    if (center.valid && gizmo->axes.center &&
+        std::hypot((double)screenX - center.x, (double)screenY - center.y) <= 10.0) {
+        return KINE_GIZMO_AXIS_CENTER;
+    }
+
+    int closestAxis = KINE_GIZMO_AXIS_NONE;
+    double closestDistance = 12.0;
+    for (int axis = KINE_GIZMO_AXIS_X; axis <= KINE_GIZMO_AXIS_Z; ++axis) {
+        double distance = std::numeric_limits<double>::max();
+        if (gizmo->type == KINE_GIZMO_ROTATE) {
+            const double radius = axis == KINE_GIZMO_AXIS_X ? 0.85 :
+                (axis == KINE_GIZMO_AXIS_Y ? 0.92 : 0.99);
+            KineGizmoScreenPoint previous;
+            constexpr int segments = 64;
+            for (int i = 0; i <= segments; ++i) {
+                const double angle = 2.0 * M_PI * i / segments;
+                math::double3 point;
+                if (axis == KINE_GIZMO_AXIS_X) point = {0.0, radius * cos(angle), radius * sin(angle)};
+                else if (axis == KINE_GIZMO_AXIS_Y) point = {radius * cos(angle), 0.0, radius * sin(angle)};
+                else point = {radius * cos(angle), radius * sin(angle), 0.0};
+                const KineGizmoScreenPoint current = kine_gizmo_project(ctx, model, point);
+                if (i > 0) {
+                    distance = std::min(distance,
+                        kine_gizmo_segment_distance(screenX, screenY, previous, current));
+                }
+                previous = current;
+            }
+        } else {
+            const KineGizmoScreenPoint start = kine_gizmo_project(
+                ctx, model, kine_gizmo_axis_point(axis, 0.08));
+            const KineGizmoScreenPoint end = kine_gizmo_project(
+                ctx, model, kine_gizmo_axis_point(axis, 1.30));
+            distance = kine_gizmo_segment_distance(screenX, screenY, start, end);
+        }
+
+        if (distance < closestDistance) {
+            closestDistance = distance;
+            closestAxis = axis;
+        }
+    }
+    return closestAxis;
+}
+
+KINE_API float Kine_Filament_GetGizmoDragDelta(
+    KineFilamentContext* ctx,
+    KineFilamentGizmo* gizmo,
+    float* mat4,
+    int axis,
+    float startX,
+    float startY,
+    float currentX,
+    float currentY)
+{
+    if (!ctx || !ctx->camera || !gizmo || !mat4) return 0.0f;
+    if (gizmo->type == KINE_GIZMO_ROTATE || axis == KINE_GIZMO_AXIS_CENTER) {
+        return ((currentX - startX) - (currentY - startY)) * 0.01f;
+    }
+
+    const math::mat4 model = kine_gizmo_model_matrix(mat4);
+    const KineGizmoScreenPoint origin = kine_gizmo_project(ctx, model, {0.0, 0.0, 0.0});
+    const KineGizmoScreenPoint endpoint = kine_gizmo_project(
+        ctx, model, kine_gizmo_axis_point(axis, 1.0));
+    if (!origin.valid || !endpoint.valid) return 0.0f;
+
+    const double axisX = endpoint.x - origin.x;
+    const double axisY = endpoint.y - origin.y;
+    const double pixelsPerUnit = std::hypot(axisX, axisY);
+    if (pixelsPerUnit <= 1e-6) return 0.0f;
+    const double mouseX = currentX - startX;
+    const double mouseY = currentY - startY;
+    return (float)((mouseX * axisX + mouseY * axisY) / (pixelsPerUnit * pixelsPerUnit));
 }
 
 KINE_API void Kine_Filament_DrawGizmo(
@@ -3501,9 +4641,14 @@ KINE_API void Kine_Filament_DrawGizmo(
             g *= 0.55f;
             b *= 0.55f;
         }
+        if (isActive) {
+            r = 1.0f;
+            g = 0.85f;
+            b = 0.15f;
+        }
 
         Kine_Filament_DrawMeshEx(
-            ctx, (KineFilamentMesh*)entry.mesh, KINE_MAT_DEFAULT,
+            ctx, (KineFilamentMesh*)entry.mesh, KINE_MAT_GIZMO,
             r, g, b,
             1.0f, 0.0f, 1.0f,
             0.0f,
@@ -3511,16 +4656,6 @@ KINE_API void Kine_Filament_DrawGizmo(
             false, false, false,
             nullptr);
 
-        const bool isSelected = (entry.id == selectedAxis);
-        const bool isHovered = (entry.id == hoveredAxis);
-        if (isSelected || isHovered) {
-            const float thickness = isSelected ? 0.03f : 0.018f;
-            Kine_Filament_DrawMeshOutline(
-                ctx, (KineFilamentMesh*)entry.mesh,
-                1.0f, 0.85f, 0.15f,
-                thickness,
-                mat4);
-        }
     }
 }
 

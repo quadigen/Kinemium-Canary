@@ -22,8 +22,6 @@ local function resolveUDim2(val, parentDim)
 	return ZERO_V
 end
 
--- Converts a Color3 + transparency (0-1) into the {R,G,B,A} shape argon's
--- SkiaAdapter expects (0-1 floats). Uses Color3:ToArgon if you add one later.
 local function toArgonColor(color3, transparency)
 	if color3.ToArgon then
 		return color3:ToArgon(transparency)
@@ -258,15 +256,102 @@ local function getGuiMetrics(object)
 	return Vector2.new(drawPos.X, drawPos.Y), Vector2.new(size.X, size.Y)
 end
 
--- TODO: wire up a real mouse position query on the argon adapter
--- (e.g. SDL_GetMouseState). Falls back to (0,0) until that exists.
 local function getMousePos(window)
 	if argon.GetMousePosition then
-		local pos = argon:GetMousePosition(window)
+		local pos = argon:GetMousePosition()
+
 		return vector.create(pos.X, pos.Y, 0)
 	end
 	return ZERO_V
 end
+
+local function makeRect(drawPos, size, color, isOutline)
+	return {
+		x = drawPos.X,
+		y = drawPos.Y,
+		width = size.X,
+		height = size.Y,
+		Color = color,
+		isOutline = isOutline or false,
+	}
+end
+
+local function resolveModifierRadius(modifier)
+	if not modifier then
+		return 0
+	end
+	local radius = modifier.CornerRadius
+	if type(radius) == "table" then
+		return radius.Offset or 0
+	end
+	return 0
+end
+
+local function getGuiShape(UICorner, UISquircle)
+	local radius = resolveModifierRadius(UICorner)
+	local exponent = 0
+	local isSquircle = false
+
+	if UISquircle then
+		radius = resolveModifierRadius(UISquircle)
+		exponent = if (UISquircle.Exponent or 0) > 0 then UISquircle.Exponent else 4
+		isSquircle = true
+	end
+
+	return isSquircle, radius, exponent
+end
+
+local modifiers = {
+	UIBackdrop = function(window, rect, modifier, isSquircle, radius, exponent)
+		if not modifier or modifier.Enabled == false or (modifier.Blur or 0) <= 0 then
+			return
+		end
+
+		rect.alpha = 1 - (modifier.Transparency or 0)
+		local tint = toArgonColor(modifier.TintColor, modifier.TintTransparency or 1)
+		if isSquircle then
+			argon:DrawBackdropBlurSquircle(window, rect, modifier.Blur, radius, exponent, tint)
+		else
+			argon:DrawBackdropBlur(window, rect, modifier.Blur, radius, radius, tint)
+		end
+		rect.alpha = nil
+	end,
+
+	UIShadow = function(window, drawPos, size, modifier, isSquircle, radius, exponent)
+		if not modifier or modifier.Enabled == false then
+			return
+		end
+
+		argon:DrawUIShadow(
+			window,
+			makeRect(drawPos, size, toArgonColor(modifier.Color, modifier.Transparency)),
+			radius,
+			if isSquircle then exponent else 0,
+			modifier.Offset or Vector2.new(0, 0),
+			modifier.Blur or 8,
+			modifier.Spread or 0
+		)
+	end,
+
+	UISquircle = function(window, rect, radius, exponent, strokeWidth)
+		argon:DrawSquircle(window, rect, radius, exponent, strokeWidth)
+	end,
+
+	UIStroke = function(window, rect, UICorner, UISquircle, stroke)
+		if not stroke or stroke.Transparency == 1 or stroke.Thickness <= 0 then
+			return
+		end
+
+		local isSquircle, radius, exponent = getGuiShape(UICorner, UISquircle)
+		if isSquircle then
+			argon:DrawSquircle(window, rect, radius, exponent, stroke.Thickness)
+		elseif UICorner then
+			argon:DrawRoundRectangle(window, rect, radius, radius, stroke.Thickness)
+		else
+			argon:DrawRectangle(window, rect)
+		end
+	end,
+}
 
 local propTable = {
 	BaseClass = "GuiObject",
@@ -339,22 +424,41 @@ local propTable = {
 		local mousePos = getMousePos(window)
 		local mouseIsInObject = isMouseInRect(mousePos, drawPos, size)
 
+		local UICorner = object:FindFirstChildOfClass("UICorner")
+		local UIBackdrop = object:FindFirstChildOfClass("UIBackdrop")
+		local UIShadow = object:FindFirstChildOfClass("UIShadow")
+		local UISquircle = object:FindFirstChildOfClass("UISquircle")
+		local UIStroke = object:FindFirstChildOfClass("UIStroke")
+		local bgColor = toArgonColor(object.BackgroundColor3, object.BackgroundTransparency)
+		local rect = makeRect(drawPos, size, bgColor)
+		local isSquircle, radius, exponent = getGuiShape(UICorner, UISquircle)
+
 		rawset(object, "MouseIsInObject", mouseIsInObject)
+		rawset(object, "AbsolutePosition", drawPos)
+		rawset(object, "AbsoluteSize", size)
+
 		object.MouseEnter:FireOncePerPress("MouseEnter", mouseIsInObject)
 		object.MouseLeave:FireOncePerPress("MouseLeave", not mouseIsInObject)
 
-		if object.BackgroundTransparency ~= 1 and size.X > 0 and size.Y > 0 then
-			argon:DrawRectangle(window, {
-				x = drawPos.X,
-				y = drawPos.Y,
-				width = size.X,
-				height = size.Y,
-				Color = toArgonColor(object.BackgroundColor3, object.BackgroundTransparency),
-			})
-		end
+		if size.X > 0 and size.Y > 0 then
+			modifiers.UIShadow(window, drawPos, size, UIShadow, isSquircle, radius, exponent)
+			modifiers.UIBackdrop(window, rect, UIBackdrop, isSquircle, radius, exponent)
 
-		rawset(object, "AbsolutePosition", drawPos)
-		rawset(object, "AbsoluteSize", size)
+			if object.BackgroundTransparency ~= 1 then
+				if isSquircle then
+					modifiers.UISquircle(window, rect, radius, exponent)
+				elseif UICorner then
+					argon:DrawRoundRectangle(window, rect, radius, radius)
+				else
+					argon:DrawRectangle(window, rect)
+				end
+			end
+
+			if UIStroke then
+				local strokeRect = makeRect(drawPos, size, toArgonColor(UIStroke.Color, UIStroke.Transparency), true)
+				modifiers.UIStroke(window, strokeRect, UICorner, UISquircle, UIStroke)
+			end
+		end
 
 		return drawPos, size
 	end,
@@ -388,14 +492,23 @@ return {
 		if object.ClipsDescendants then
 			local pos = object.AbsolutePosition or ZERO_V
 			local size = object.AbsoluteSize or ZERO_V
-
-			argon:Save(window)
-			argon:ClipRoundRect(window, {
+			local UISquircle = object:FindFirstChildOfClass("UISquircle")
+			local UICorner = object:FindFirstChildOfClass("UICorner")
+			local rect = {
 				x = pos.X,
 				y = pos.Y,
 				width = math.max(1, size.X),
 				height = math.max(1, size.Y),
-			}, 0, 0) -- radius 0,0 == plain rect clip
+			}
+
+			argon:Save(window)
+			if UISquircle then
+				local exponent = if (UISquircle.Exponent or 0) > 0 then UISquircle.Exponent else 4
+				argon:ClipSquircle(window, rect, resolveModifierRadius(UISquircle), exponent)
+			else
+				local radius = resolveModifierRadius(UICorner)
+				argon:ClipRoundRect(window, rect, radius, radius)
+			end
 			didClip = true
 		end
 

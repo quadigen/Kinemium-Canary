@@ -74,8 +74,8 @@ export type Rectangle = {
 	y: number,
 	width: number,
 	height: number,
-	isOutline: boolean,
-	Color: RGBA,
+	isOutline: boolean?,
+	Color: RGBA?,
 }
 
 export type Vector = {

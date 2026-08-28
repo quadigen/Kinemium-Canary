@@ -19,37 +19,6 @@ StarterGui.InitRenderer = function(renderer, signal, datamodel)
 
 		local CoreGui = datamodel:GetService("CoreGui")
 
-		local cache = {}
-
-		local function renderGui(child)
-			if cache[child.UniqueId] then
-				return
-			end
-
-			if type(child) == "table" and child.BaseClass == "UIContainer" then
-				if child["render"] then
-					local renderId
-					renderId = renderer.Pool.new("2d", function()
-						if not child.render then
-							renderer.Pool.Destroy(renderId)
-							return
-						end
-						local dt = renderer.Lib2d.GetFrameTime()
-						--child.render(renderer.Lib2d, child, dt, adapter.structs, renderer, datamodel)
-					end, -5)
-					cache[child.UniqueId] = renderId
-				end
-			end
-		end
-
-		StarterGui.ChildAdded:Connect(function(child)
-			renderGui(child)
-		end)
-
-		for _, child in pairs(StarterGui:GetChildren()) do
-			renderGui(child)
-		end
-
 		function StarterGui:SetCoreGuiEnabled(coreGuiType, enabled: boolean)
 			CoreGui:SetCoreGuiEnabled(coreGuiType, enabled)
 		end
@@ -65,7 +34,16 @@ StarterGui.InitRenderer = function(renderer, signal, datamodel)
 		function StarterGui:GetCoreGuiEnabled(coreGuiType)
 			return CoreGui:GetCoreGuiEnabled(coreGuiType)
 		end
+
+		renderer.Pool.new("2da", function()
+			for _, child in pairs(StarterGui:GetChildren()) do
+				if child["render"] then
+					child.render()
+				end
+			end
+		end)
 	end)
+
 	return StarterGui
 end
 

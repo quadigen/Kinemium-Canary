@@ -14,6 +14,7 @@ local TAG_INT_NEG32 = 9 -- stored as u32 magnitude
 local TAG_STR_SHORT = 10 -- length fits u8  (0–255)
 local TAG_STR_LONG = 11 -- length fits u32
 local TAG_TABLE = 12
+local TAG_BUFFER = 13
 
 -- Cached buffer functions (avoid repeated table lookups in hot loops)
 local buf_create = buffer.create
@@ -184,6 +185,10 @@ encodeValue = function(w: typeof(Writer.new()), value: any, seen: { [any]: boole
 			w:u32(len)
 		end
 		w:str(value)
+	elseif t == "buffer" then
+		w:u8(TAG_BUFFER)
+		w:u32(buf_len(value))
+		w:bytes(value)
 	elseif t == "table" then
 		if seen[value] then
 			w:u8(TAG_NIL)
@@ -279,6 +284,12 @@ local function decodeValue(buf: buffer, offset: number, length: number): (any, n
 		local len = buf_readu32(buf, offset)
 		offset += 4
 		return buf_readstring(buf, offset, len), offset + len
+	elseif tag == TAG_BUFFER then
+		local len = buf_readu32(buf, offset)
+		offset += 4
+		local value = buf_create(len)
+		buf_copy(value, 0, buf, offset, len)
+		return value, offset + len
 	elseif tag == TAG_TABLE then
 		local t = {}
 

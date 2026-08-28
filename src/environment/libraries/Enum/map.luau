@@ -127,6 +127,7 @@ enumTable.KinemiumShaderPreset = {
 }
 
 enumTable.KeyCode = {
+	None = 0,
 	Space = 32,
 	Quote = 39, -- Apostrophe
 	Comma = 44,
@@ -352,6 +353,7 @@ enumTable.VelocityConstraintMode = {
 enumTable.Material = {
 	SmoothPlastic = "smoothplastic",
 	Wood = "wood",
+	Brick = "brick",
 	Grass = "grass",
 	Concrete = "concrete",
 	Slate = "slate",
@@ -784,6 +786,10 @@ enumTable.CameraType = {
 	Orbital = 2,
 	FirstPerson = 3,
 	ThirdPerson = 4,
+	Follow = 5,
+	Shoulder = 8,
+	TopDown = 9,
+	Isometric = 10,
 }
 
 enumTable.SecurityCapabilities = {

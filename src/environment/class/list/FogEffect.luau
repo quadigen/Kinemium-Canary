@@ -18,38 +18,7 @@ return {
 	class = "FogEffect",
 
 	callback = function(instance)
-		local r3d = require("@r3d")
-
 		instance:SetProperties(propTable)
-
-		local color = instance.Color:ToRaylib(0)
-
-		local envfog = r3d.structs.R3D_EnvFog:new({
-			mode = instance.Enabled and instance.Mode.Value or 0,
-			color = color,
-			start = instance.Start,
-			["end"] = instance.End,
-			density = instance.Density,
-			skyAffect = instance.SkyAffect,
-		})
-		instance:SetMetadata("EffectObject", envfog)
-
-		instance.Changed:Connect(function(property, value)
-			if property == "_r3deffect" then
-				return
-			end
-			local color = instance.Color:ToRaylib(0)
-
-			envfog = r3d.structs.R3D_EnvFog:new({
-				mode = instance.Enabled and instance.Mode.Value or 0,
-				color = color,
-				start = instance.Start,
-				["end"] = instance.End,
-				density = instance.Density,
-				skyAffect = instance.SkyAffect,
-			})
-			instance:SetMetadata("EffectObject", envfog)
-		end)
 
 		return instance
 	end,

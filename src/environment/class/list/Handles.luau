@@ -1,157 +1,180 @@
--- description: "A 3d handle that can be moved or scaled and appears under an Adornee."
+-- description: "An interactive Filament transform gizmo attached to an Adornee."
 local Color3 = require("@Color3")
-local signal = require("@kinemium.signal")
+local signal = require("@Kinemium.signal")
 local Enum = require("@EnumMap")
-local ffi = zune.ffi
-local CFrame = require("@CFrame")
-local Vector3 = require("@Vector3")
+local argon = require("@Argon")
 
 local propTable = {
 	Color = Color3.new(0.5, 0.5, 0.5),
 	Adornee = nil,
 	CastShadows = false,
 	Name = "Handles",
-
-	-- signals
-	MouseButton1Down = signal.new(),
-	MouseButton1Up = signal.new(),
-	MouseDrag = signal.new(),
-	MouseEnter = signal.new(),
-	MouseLeave = signal.new(),
-
-	-- enum
-	Style = Enum.HandlesStyle.Movement,
+	Style = Enum.HandlesStyle.Rotation,
 	RotationSnap = 0,
-
-	_gizmoTransform = ffi.alloc(12 + 16 + 12),
-	_isDragging = false,
 }
+
+local signalNames = { "MouseButton1Down", "MouseButton1Up", "MouseDrag", "MouseEnter", "MouseLeave" }
+
+local function styleName(style)
+	return style and style.Name or "Movement"
+end
+
+local function gizmoType(style)
+	local name = styleName(style)
+	if name == "Resize" then
+		return "scale"
+	elseif name == "Rotation" then
+		return "rotate"
+	end
+	return "move"
+end
+
+local function axisNormalId(axis)
+	if axis == 1 then
+		return Enum.NormalId.Right
+	elseif axis == 2 then
+		return Enum.NormalId.Top
+	elseif axis == 3 then
+		return Enum.NormalId.Back
+	end
+	return nil
+end
 
 return {
 	class = "Handles",
 
 	callback = function(instance, renderer)
-		local gizmo = require("@gizmo")
+		for _, property in ipairs(signalNames) do
+			instance:SetProperty(property, signal.new())
+		end
+		instance:SetProperties(propTable)
 
-		instance.Changed:Connect(function(prop)
-			if prop == "Adornee" then
-				local part = instance.Adornee
-				if part == nil then
-					return
+		local hoveredAxis = 0
+		local selectedAxis = 0
+		local dragStartX = 0
+		local dragStartY = 0
+		local lastDragDelta = nil
+		local currentType = nil
+		local renderId = nil
+
+		local function replaceGizmo()
+			local nextType = gizmoType(instance.Style)
+			if currentType == nextType and instance._gizmo and instance._gizmo._handle then
+				return
+			end
+			if instance._gizmo then
+				argon:DestroyGizmo(renderer.Window, instance._gizmo)
+			end
+			instance._gizmo = argon:CreateGizmo(renderer.Window, nextType)
+			currentType = nextType
+			hoveredAxis = 0
+			selectedAxis = 0
+		end
+
+		replaceGizmo()
+
+		renderId = renderer.Pool.new("gizmo", function()
+			local adornee = instance.Adornee
+			if not adornee or not adornee.CFrame then
+				if hoveredAxis ~= 0 then
+					instance.MouseLeave:Fire(axisNormalId(hoveredAxis))
+					hoveredAxis = 0
 				end
-				if part and part.BaseClass == "BasePart" then
-					local pos = part.CFrame.Position
-					instance._gizmoTransform:writef32(0, pos.X)
-					instance._gizmoTransform:writef32(4, pos.Y)
-					instance._gizmoTransform:writef32(8, pos.Z)
+				return
+			end
 
-					local x, y, z, w = part.CFrame:ToQuaternion()
-					instance._gizmoTransform:writef32(12, x)
-					instance._gizmoTransform:writef32(16, y)
-					instance._gizmoTransform:writef32(20, z)
-					instance._gizmoTransform:writef32(24, w)
+			replaceGizmo()
+			local gizmo = instance._gizmo
+			if not gizmo or not gizmo._handle then
+				return
+			end
+			local mat4 = adornee.CFrame:ToEngineMatrix()
+			local mouse = argon:GetMousePosition()
+			local pickedAxis = argon:PickGizmo(renderer.Window, gizmo, mat4, mouse.X, mouse.Y)
 
-					local size = part.Size
-					instance._gizmoTransform:writef32(28, size.X)
-					instance._gizmoTransform:writef32(32, size.Y)
-					instance._gizmoTransform:writef32(36, size.Z)
-				elseif part and part.ClassName == "Model" then
-					local pivot = part:GetPivot()
-					local pos = pivot.Position
-					instance._gizmoTransform:writef32(0, pos.X)
-					instance._gizmoTransform:writef32(4, pos.Y)
-					instance._gizmoTransform:writef32(8, pos.Z)
-
-					local x, y, z, w = pivot:ToQuaternion()
-					instance._gizmoTransform:writef32(12, x)
-					instance._gizmoTransform:writef32(16, y)
-					instance._gizmoTransform:writef32(20, z)
-					instance._gizmoTransform:writef32(24, w)
-
-					local size = part:GetExtentsSize()
-					instance._gizmoTransform:writef32(28, math.max(size.X, 0.001))
-					instance._gizmoTransform:writef32(32, math.max(size.Y, 0.001))
-					instance._gizmoTransform:writef32(36, math.max(size.Z, 0.001))
+			if selectedAxis == 0 and pickedAxis ~= hoveredAxis then
+				if hoveredAxis ~= 0 then
+					instance.MouseLeave:Fire(axisNormalId(hoveredAxis))
 				end
+				hoveredAxis = pickedAxis
+				if hoveredAxis ~= 0 then
+					instance.MouseEnter:Fire(axisNormalId(hoveredAxis))
+				end
+			end
+
+			if selectedAxis == 0 and hoveredAxis ~= 0 and argon:IsMouseButtonPressed(argon.MouseButton.Left) then
+				selectedAxis = hoveredAxis
+				dragStartX = mouse.X
+				dragStartY = mouse.Y
+				lastDragDelta = nil
+				instance.MouseButton1Down:Fire(axisNormalId(selectedAxis))
+			end
+
+			if selectedAxis ~= 0 and argon:IsMouseButtonDown(argon.MouseButton.Left) then
+				local delta = argon:GetGizmoDragDelta(
+					renderer.Window,
+					gizmo,
+					mat4,
+					selectedAxis,
+					dragStartX,
+					dragStartY,
+					mouse.X,
+					mouse.Y
+				)
+				if currentType == "rotate" then
+					local snapDegrees = math.max(0, instance.RotationSnap or 0)
+					if snapDegrees > 0 then
+						local snapRadians = math.rad(snapDegrees)
+						delta = math.round(delta / snapRadians) * snapRadians
+					end
+				end
+				if delta ~= lastDragDelta then
+					lastDragDelta = delta
+					instance.MouseDrag:Fire(axisNormalId(selectedAxis), delta)
+				end
+			end
+
+			if selectedAxis ~= 0 and argon:IsMouseButtonReleased(argon.MouseButton.Left) then
+				local releasedAxis = selectedAxis
+				selectedAxis = 0
+				lastDragDelta = nil
+				instance.MouseButton1Up:Fire(axisNormalId(releasedAxis))
+			end
+
+			argon:DrawGizmo(renderer.Window, gizmo, mat4, hoveredAxis, selectedAxis)
+		end)
+
+		instance.Changed:Connect(function(property)
+			if property == "Style" then
+				replaceGizmo()
 			end
 		end)
 
-		propTable.render = function(handles, renderer, datamodel)
-			if handles.Adornee then
-				local part = handles.Adornee
-				if part and part:IsA("BasePart") then
-					if not handles._isDragging then
-						local pos = part.CFrame.Position
-						handles._gizmoTransform:writef32(0, pos.X)
-						handles._gizmoTransform:writef32(4, pos.Y)
-						handles._gizmoTransform:writef32(8, pos.Z)
-
-						local x, y, z, w = part.CFrame:ToQuaternion()
-						handles._gizmoTransform:writef32(12, x)
-						handles._gizmoTransform:writef32(16, y)
-						handles._gizmoTransform:writef32(20, z)
-						handles._gizmoTransform:writef32(24, w)
-
-						local size = part.Size
-						handles._gizmoTransform:writef32(28, size.X)
-						handles._gizmoTransform:writef32(32, size.Y)
-						handles._gizmoTransform:writef32(36, size.Z)
-					end
-				elseif part and part.ClassName == "Model" then
-					if not handles._isDragging then
-						local pivot = part:GetPivot()
-						local pos = pivot.Position
-						handles._gizmoTransform:writef32(0, pos.X)
-						handles._gizmoTransform:writef32(4, pos.Y)
-						handles._gizmoTransform:writef32(8, pos.Z)
-
-						local x, y, z, w = pivot:ToQuaternion()
-						handles._gizmoTransform:writef32(12, x)
-						handles._gizmoTransform:writef32(16, y)
-						handles._gizmoTransform:writef32(20, z)
-						handles._gizmoTransform:writef32(24, w)
-
-						local size = part:GetExtentsSize()
-						handles._gizmoTransform:writef32(28, math.max(size.X, 0.001))
-						handles._gizmoTransform:writef32(32, math.max(size.Y, 0.001))
-						handles._gizmoTransform:writef32(36, math.max(size.Z, 0.001))
-					end
-				end
-
-				local success = false
-
-				if handles.Style == Enum.HandlesStyle.Movement then
-					success = gizmo.DrawGizmo3D(gizmo.Flags.TRANSLATE, handles._gizmoTransform)
-				elseif handles.Style == Enum.HandlesStyle.Rotation then
-					success = gizmo.DrawGizmo3D(gizmo.Flags.ROTATE, handles._gizmoTransform)
-				elseif handles.Style == Enum.HandlesStyle.Resize then
-					success = gizmo.DrawGizmo3D(gizmo.Flags.SCALE, handles._gizmoTransform)
-				end
-
-				handles._isDragging = success
-
-				if success then
-					local gt = handles._gizmoTransform
-					local pos = Vector3.new(gt:readf32(0), gt:readf32(4), gt:readf32(8))
-					local qx, qy, qz, qw = gt:readf32(12), gt:readf32(16), gt:readf32(20), gt:readf32(24)
-
-					local newCF = CFrame.fromQuaternion(qx, qy, qz, qw, pos)
-					local newScale = Vector3.new(gt:readf32(28), gt:readf32(32), gt:readf32(36))
-
-					handles.Transform = newCF
-					instance.MouseDrag:Fire(newCF, newScale)
+		instance.Destroying:Connect(function()
+			if renderId then
+				renderer.Pool.Destroy(renderId)
+				renderId = nil
+			end
+			if instance._gizmo then
+				argon:DestroyGizmo(renderer.Window, instance._gizmo)
+				instance._gizmo = nil
+			end
+			for _, property in ipairs(signalNames) do
+				local event = instance[property]
+				if event and event.Destroy then
+					event:Destroy()
 				end
 			end
-		end
-
-		instance:SetProperties(propTable)
+		end)
 
 		return instance
 	end,
 
 	inherit = function(tble)
-		for prop, val in pairs(propTable) do
-			tble[prop] = val
+		for property, value in pairs(propTable) do
+			if tble[property] == nil then
+				tble[property] = value
+			end
 		end
 	end,
 }

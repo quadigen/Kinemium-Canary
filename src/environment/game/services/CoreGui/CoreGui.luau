@@ -54,7 +54,7 @@ CoreGui.InitRenderer = function(renderer, renderer_signal, datamodel)
 		return false
 	end
 
-	renderer.Pool.new("2d", function()
+	renderer.Pool.new("2da", function()
 		for _, child in pairs(CoreGui:GetChildren()) do
 			if child["render"] then
 				child.render()

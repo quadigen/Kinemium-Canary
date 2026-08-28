@@ -1,9 +1,5 @@
 local Instance = require("@Instance")
-local signal = require("@Kinemium.signal")
-
 local NetworkService = Instance.new("NetworkService")
-
-local gns = require("@gns")
 
 NetworkService.InitRenderer = function(renderer, renderer_signal, datamodel)
 	if IsHeadless == true then

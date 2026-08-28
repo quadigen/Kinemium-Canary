@@ -8,6 +8,9 @@ return {
 		Neon = 2,
 		Water = 3,
 		Outline = 4,
+		Gizmo = 5,
+		Particle = 6,
+		Terrain = 7,
 	},
 	GizmoType = {
 		Move = 10,

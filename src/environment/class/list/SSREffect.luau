@@ -4,6 +4,7 @@ local propTable = {
 	BinarySteps = 5,
 	StepSize = 0.125,
 	Thickness = 1.0,
+	Bias = 0.01,
 	MaxDistance = 100.0,
 	EdgeFade = 0.1,
 	Enabled = true,
@@ -14,37 +15,29 @@ local propTable = {
 return {
 	class = "SSREffect",
 
-	callback = function(instance)
-		local r3d = require("@r3d")
+	callback = function(instance, renderer)
+		local Argon = require("@Argon")
 
 		instance:SetProperties(propTable)
 
-		local envssr = r3d.structs.R3D_EnvSSR:new({
-			maxRaySteps = instance.MaxRaySteps,
-			binarySteps = instance.BinarySteps,
-			stepSize = instance.StepSize,
-			thickness = instance.Thickness,
-			maxDistance = instance.MaxDistance,
-			edgeFade = instance.EdgeFade,
-			enabled = instance.Enabled and 1 or 0,
-		})
-		instance:SetMetadata("EffectObject", envssr)
-
-		instance.Changed:Connect(function(property, value)
-			if property == "_r3deffect" then
+		local function applyFilament()
+			if not renderer or not renderer.Window then
 				return
 			end
-			envssr = r3d.structs.R3D_EnvSSR:new({
-				maxRaySteps = instance.MaxRaySteps,
-				binarySteps = instance.BinarySteps,
-				stepSize = instance.StepSize,
-				thickness = instance.Thickness,
-				maxDistance = instance.MaxDistance,
-				edgeFade = instance.EdgeFade,
-				enabled = instance.Enabled and 1 or 0,
+			local active = instance.Enabled and instance.Parent ~= nil and instance.Parent:IsA("Lighting")
+			Argon:SetScreenSpaceReflections(renderer.Window, active, {
+				Thickness = math.max(instance.Thickness, 0),
+				Bias = instance.Bias,
+				MaxDistance = math.max(instance.MaxDistance, 0),
+				Stride = math.max(instance.StepSize, 0.001),
 			})
-			instance:SetMetadata("EffectObject", envssr)
+		end
+
+		instance.Changed:Connect(function(property, value)
+			applyFilament()
 		end)
+		instance.AncestryChanged:Connect(applyFilament)
+		applyFilament()
 
 		return instance
 	end,

@@ -72,6 +72,10 @@ KINE_SKIA_API int Kine_Skia_Surface_GetHeight(const KineSkiaSurface* surface);
 KINE_SKIA_API size_t Kine_Skia_Surface_GetRowBytes(const KineSkiaSurface* surface);
 KINE_SKIA_API void* Kine_Skia_Surface_GetPixels(KineSkiaSurface* surface);
 KINE_SKIA_API void Kine_Skia_Surface_Flush(KineSkiaSurface* surface);
+KINE_SKIA_API void Kine_Skia_Surface_SetBackdropFromSurface(
+    KineSkiaSurface* surface,
+    KineSkiaSurface* backdrop);
+KINE_SKIA_API void Kine_Skia_Surface_ClearBackdrop(KineSkiaSurface* surface);
 
 /* Debug/readback helper: sample a single pixel back out of the surface */
 KINE_SKIA_API void Kine_Skia_Surface_GetPixel(
@@ -100,6 +104,37 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawRoundRect(
     float radiusX, float radiusY,
     uint8_t r, uint8_t g, uint8_t b, uint8_t a,
     float strokeWidth);
+
+KINE_SKIA_API void Kine_Skia_Surface_DrawSquircle(
+    KineSkiaSurface* surface,
+    float x, float y, float width, float height,
+    float radius, float exponent,
+    uint8_t r, uint8_t g, uint8_t b, uint8_t a,
+    float strokeWidth);
+
+KINE_SKIA_API void Kine_Skia_Surface_DrawUIShadow(
+    KineSkiaSurface* surface,
+    float x, float y, float width, float height,
+    float radius, float exponent,
+    float offsetX, float offsetY,
+    float blurSigma, float spread,
+    uint8_t r, uint8_t g, uint8_t b, uint8_t a);
+
+KINE_SKIA_API void Kine_Skia_Surface_DrawBackdropBlurRect(
+    KineSkiaSurface* surface,
+    float x, float y, float width, float height,
+    float radiusX, float radiusY,
+    float blurSigma,
+    uint8_t alpha,
+    uint8_t tintR, uint8_t tintG, uint8_t tintB, uint8_t tintA);
+
+KINE_SKIA_API void Kine_Skia_Surface_DrawBackdropBlurSquircle(
+    KineSkiaSurface* surface,
+    float x, float y, float width, float height,
+    float radius, float exponent,
+    float blurSigma,
+    uint8_t alpha,
+    uint8_t tintR, uint8_t tintG, uint8_t tintB, uint8_t tintA);
 
 KINE_SKIA_API void Kine_Skia_Surface_DrawCircle(
     KineSkiaSurface* surface,
@@ -150,11 +185,25 @@ KINE_SKIA_API void Kine_Skia_Surface_ClipRoundRect(
     float x, float y, float width, float height,
     float radiusX, float radiusY);
 
+KINE_SKIA_API void Kine_Skia_Surface_ClipSquircle(
+    KineSkiaSurface* surface,
+    float x, float y, float width, float height,
+    float radius, float exponent);
+
 KINE_SKIA_API void Kine_Skia_Surface_DrawImageSized(
     KineSkiaSurface* surface,
     KineSkiaImage* image,
     float x, float y,
     float width, float height,
+    uint8_t alpha);
+
+KINE_SKIA_API void Kine_Skia_Surface_DrawImageOutlineSized(
+    KineSkiaSurface* surface,
+    KineSkiaImage* image,
+    float x, float y,
+    float width, float height,
+    float thickness,
+    uint8_t r, uint8_t g, uint8_t b, uint8_t a,
     uint8_t alpha);
 
 KINE_SKIA_API float Kine_Skia_Surface_GetFontAscent(float fontSize, const char* fontPath);

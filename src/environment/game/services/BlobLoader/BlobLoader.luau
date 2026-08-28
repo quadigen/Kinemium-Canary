@@ -179,6 +179,9 @@ BlobLoader.InitRenderer = function(renderer, renderer_signal, datamodel)
 				continue
 			end
 
+			-- Snapshot service roots can compare equal to their live counterpart because
+			-- they preserve UniqueId. Detach first so Parent assignment cannot short-circuit.
+			child.Parent = nil
 			child.Parent = targetRoot
 			print("Attached ", childName)
 		end
@@ -189,6 +192,7 @@ BlobLoader.InitRenderer = function(renderer, renderer_signal, datamodel)
 			return datamodel:GetService(serviceSnapshot.Name)
 		end)
 		if ok and liveService then
+			mergeProps(serviceSnapshot, liveService)
 			attachChildren(serviceSnapshot, liveService)
 			return liveService
 		end

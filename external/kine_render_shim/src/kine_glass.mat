@@ -2,14 +2,17 @@ material {
     name : "kine_glass",
     shadingModel : lit,
     blending : transparent,
-    refractionMode : cubemap,
+    // Cubemap refraction only bends the distant environment. Screen-space
+    // refraction also warps opaque scene geometry behind the glass.
+    refractionMode : screenspace,
     refractionType : solid,
     parameters : [
         { type : float3, name : baseColor },
         { type : float,  name : roughness },
         { type : float,  name : ior },
         { type : float,  name : thickness },
-        { type : float,  name : transmission }
+        { type : float,  name : transmission },
+        { type : float3, name : absorption }
     ]
 }
 
@@ -21,6 +24,7 @@ fragment {
         material.ior           = materialParams.ior;
         material.thickness     = materialParams.thickness;
         material.transmission  = materialParams.transmission;
+        material.absorption    = materialParams.absorption;
         material.baseColor.a   = 1.0;
     }
 }

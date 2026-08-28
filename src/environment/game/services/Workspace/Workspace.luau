@@ -10,6 +10,12 @@ export type KinemiumCFrame = typeof(CFrame.new())
 Workspace._Intents = Enum.PluginIntents.Graphic
 
 local materialTextures = {}
+local displacedMaterials = {}
+
+local materialHeightScales = {
+	brick = 0.12,
+	wood = 0.04,
+}
 
 Workspace.InitRenderer = function(renderer, signal, game)
 	Workspace:SetProperties({
@@ -22,9 +28,10 @@ Workspace.InitRenderer = function(renderer, signal, game)
 
 	local meshes = {
 		cube = argon:CreateMesh(renderer.Window, "cube"),
+		displacedCube = argon:CreateMesh(renderer.Window, "displacedCube"),
 		sphere = argon:CreateMesh(renderer.Window, "sphere"),
-		pyramid = argon:CreateMesh(renderer.Window, "pyramid"),
 	}
+	Workspace.MeshesPreset = meshes
 
 	local material_index = {}
 
@@ -59,11 +66,24 @@ Workspace.InitRenderer = function(renderer, signal, game)
 					continue
 				end
 
-				local albedo_tex = zembed.AssetPath(path .. `/{dir.name}/albedo.png`) -- assume pngs
+				local albedo_tex = path .. `/{dir.name}/albedo.png` -- assume pngs
+				local normal_tex = path .. `/{dir.name}/normal.png`
+				local orm_tex = path .. `/{dir.name}/orm.png`
+				local height_tex = path .. `/{dir.name}/height.png`
 
-				local ptr = argon:CreateMeshTexture(renderer.Window, albedo_tex)
+				local ptr = argon:CreatePbrMeshTexture(
+					renderer.Window,
+					albedo_tex,
+					normal_tex,
+					orm_tex,
+					height_tex,
+					materialHeightScales[dir.name] or 0
+				)
 
 				materialTextures[material_index[dir.name]] = ptr
+				if (materialHeightScales[dir.name] or 0) > 0 then
+					displacedMaterials[material_index[dir.name]] = true
+				end
 			end
 		end
 	end
@@ -86,13 +106,22 @@ Workspace.InitRenderer = function(renderer, signal, game)
 		return 0
 	end
 
+	local function getMeshForShape(shape, material)
+		if shape == Enum.PartType.Ball then
+			return meshes.sphere
+		end
+		if displacedMaterials[material] then
+			return meshes.displacedCube
+		end
+		return meshes.cube
+	end
+
 	local renderParts = {}
 	local renderPartIndices = {}
-	local sceneVersion = 1
-	local packedVersion = 0
+	local metadataDirty = true
+	local dynamicGroups = {}
+	local dynamicPartState = {}
 	local renderProperties = {
-		CFrame = true,
-		Position = true,
 		Size = true,
 		Color = true,
 		Transparency = true,
@@ -100,6 +129,11 @@ Workspace.InitRenderer = function(renderer, signal, game)
 		Roughness = true,
 		CastShadow = true,
 		Material = true,
+		Shape = true,
+	}
+	local transformProperties = {
+		CFrame = true,
+		Position = true,
 	}
 
 	local function isBasePart(object)
@@ -118,7 +152,7 @@ Workspace.InitRenderer = function(renderer, signal, game)
 		end
 		table.insert(renderParts, object)
 		renderPartIndices[object] = #renderParts
-		sceneVersion += 1
+		metadataDirty = true
 	end
 
 	local function removePart(object)
@@ -133,7 +167,7 @@ Workspace.InitRenderer = function(renderer, signal, game)
 		if last and last ~= object then
 			renderPartIndices[last] = index
 		end
-		sceneVersion += 1
+		metadataDirty = true
 	end
 
 	local function addTree(object)
@@ -156,51 +190,165 @@ Workspace.InitRenderer = function(renderer, signal, game)
 	local descendantAdded = Workspace.DescendantAdded:Connect(addTree)
 	local descendantRemoving = Workspace.DescendantRemoving:Connect(removeTree)
 	local descendantChanged = Workspace.DescendantChanged:Connect(function(object, property)
-		if renderPartIndices[object] and renderProperties[property] then
-			sceneVersion += 1
+		if not renderPartIndices[object] then
+			return
+		end
+		if transformProperties[property] then
+			local state = dynamicPartState[object]
+			if state and not state.dirty then
+				state.dirty = true
+				table.insert(state.group.dirtyUpdates, state)
+			end
+		elseif renderProperties[property] then
+			metadataDirty = true
 		end
 	end)
 
-	local partDrawList = {}
-	renderer.Hook.new("Renderstep", function()
-		local partCount = #renderParts
-		if packedVersion ~= sceneVersion then
-			for i = 1, partCount do
-				local object = renderParts[i]
-				local props = rawget(object, "_props")
-				local drawCall = partDrawList[i]
-				if not drawCall then
-					drawCall = {}
-					partDrawList[i] = drawCall
-				end
+	local function updateDrawCallTransform(drawCall, props)
+		drawCall.matrix = nil
+		drawCall.cframe = props.CFrame
+		drawCall.scale = props.Size
+	end
 
-				local size = props.Size
-				local material = props.Material
-				drawCall.texture = materialTextures[material]
-				drawCall.MaterialKind = getMaterialKind(material)
-				drawCall.MaterialTileScale = math.max(1, math.max(size.X, size.Y, size.Z) / 4)
-				drawCall.mesh = meshes.cube
-				drawCall.matrix = nil
-				drawCall.cframe = props.CFrame
-				drawCall.scale = size
-				drawCall.color = props.Color
-				drawCall.transparency = props.Transparency
-				drawCall.metallic = props.Metallic
-				drawCall.roughness = props.Roughness
-				drawCall.CastShadow = props.CastShadow
-				drawCall.RecieveShadow = true
-				drawCall.Culling = true
+	local function destroyDynamicGroups()
+		for _, group in pairs(dynamicGroups) do
+			if group.batch then
+				renderer.MeshPool.DestroyInstanceBatch(group.batch)
 			end
-
-			for i = #partDrawList, partCount + 1, -1 do
-				partDrawList[i] = nil
-			end
-			packedVersion = sceneVersion
 		end
-		renderer.MeshPool.DrawMeshList(partDrawList, partCount, 1, sceneVersion)
+		table.clear(dynamicGroups)
+		table.clear(dynamicPartState)
+	end
+
+	local function fillDrawCall(drawCall, props)
+		local size = props.Size
+		local material = props.Material
+		local isGlass = material == Enum.Material.Glass
+		drawCall.texture = materialTextures[material]
+		drawCall.MaterialKind = getMaterialKind(material)
+		if isGlass then
+			-- Glass uses these shared draw fields as its optical parameters:
+			-- roughness, IOR, volume thickness, and transmission respectively.
+			drawCall.roughness = math.clamp((props.Roughness or 0.5) * 0.2, 0.02, 0.18)
+			drawCall.metallic = 1.52
+			drawCall.MaterialTileScale = math.max(0.05, math.min(size.X, size.Y, size.Z) * 0.5)
+			drawCall.transmission = 0.88 + math.clamp(props.Transparency or 0, 0, 1) * 0.12
+		else
+			drawCall.MaterialTileScale = math.max(1, math.max(size.X, size.Y, size.Z) / 4)
+			drawCall.metallic = props.Metallic
+			drawCall.roughness = props.Roughness
+			drawCall.transmission = 0
+		end
+		drawCall.mesh = getMeshForShape(props.Shape, material)
+		updateDrawCallTransform(drawCall, props)
+		drawCall.color = props.Color
+		drawCall.transparency = props.Transparency
+		-- Filament's depth-only shadow pass treats transmissive solids as opaque.
+		-- Avoid the solid black shadow until transparent shadows are supported.
+		drawCall.CastShadow = props.CastShadow and not isGlass
+		drawCall.RecieveShadow = true
+		drawCall.Culling = true
+	end
+
+	local function getRenderKey(props)
+		local color = props.Color
+		local material = props.Material
+		local isGlass = material == Enum.Material.Glass
+		local size = props.Size
+		local texture = materialTextures[material]
+		local mesh = getMeshForShape(props.Shape, material)
+		local materialParam3 = if isGlass
+			then math.max(0.05, math.min(size.X, size.Y, size.Z) * 0.5)
+			else math.max(1, math.max(size.X, size.Y, size.Z) / 4)
+		return table.concat({
+			tostring(mesh),
+			tostring(texture),
+			tostring(getMaterialKind(material)),
+			tostring(color.R),
+			tostring(color.G),
+			tostring(color.B),
+			tostring(props.Transparency),
+			tostring(props.Metallic),
+			tostring(props.Roughness),
+			tostring(props.CastShadow),
+			tostring(materialParam3),
+		}, "|")
+	end
+
+	local function rebuildDynamicGroups()
+		destroyDynamicGroups()
+
+		for _, object in pairs(renderParts) do
+			local props = rawget(object, "_props")
+			if not props then
+				continue
+			end
+
+			local key = getRenderKey(props)
+			local group = dynamicGroups[key]
+			if not group then
+				group = {
+					drawCalls = {},
+					parts = {},
+					dirtyUpdates = {},
+				}
+				dynamicGroups[key] = group
+			end
+
+			local drawCall = {}
+			fillDrawCall(drawCall, props)
+			table.insert(group.drawCalls, drawCall)
+			table.insert(group.parts, object)
+			dynamicPartState[object] = {
+				group = group,
+				object = object,
+				index = #group.parts - 1,
+				dirty = false,
+			}
+		end
+
+		for _, group in pairs(dynamicGroups) do
+			group.batch = renderer.MeshPool.CreateInstanceBatch(group.drawCalls, #group.drawCalls)
+		end
+
+		metadataDirty = false
+	end
+
+	local function flushTransformUpdates()
+		for _, group in pairs(dynamicGroups) do
+			local updates = group.dirtyUpdates
+			if group.batch and #updates > 0 then
+				for i = 1, #updates do
+					local state = updates[i]
+					local props = rawget(state.object, "_props")
+					if props then
+						state.matrix = nil
+						state.cframe = props.CFrame
+						state.scale = props.Size
+					end
+				end
+				renderer.MeshPool.UpdateInstanceTransforms(group.batch, updates, #updates)
+				for i = 1, #updates do
+					local state = updates[i]
+					state.dirty = false
+					state.cframe = nil
+					state.scale = nil
+				end
+				table.clear(updates)
+			end
+		end
+	end
+
+	renderer.Hook.new("Renderstep", function()
+		if metadataDirty then
+			rebuildDynamicGroups()
+		else
+			flushTransformUpdates()
+		end
 	end)
 
 	renderer.Hook.new("Shutdown", function()
+		destroyDynamicGroups()
 		descendantAdded:Disconnect()
 		descendantRemoving:Disconnect()
 		descendantChanged:Disconnect()

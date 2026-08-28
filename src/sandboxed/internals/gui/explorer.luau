@@ -1,9 +1,16 @@
-local RunService = game:GetService("RunService")
 local StudioThemeService = game:GetService("StudioThemeService")
 local Immco = require("@Immco")
 local theme = StudioThemeService.SelectedTheme
 local Selection = game:GetService("Selection")
 local Argon = require("@Argon")
+
+if IsServer then
+	return
+end
+
+if IsClient then
+	return
+end
 
 repeat
 	task.wait()
@@ -21,10 +28,74 @@ local retainedStorage = {}
 local iconCache = {}
 local iconPath = "./src/assets/images/icons/"
 local textBoxStorage = {}
+local contextMenuStorage = {}
 
 local arrowRight = Argon:CreateImageFromPath(iconPath .. "ArrowRight.png")
 local expandedIcon = Argon:CreateImageFromPath(iconPath .. "ArrowDown.png")
+local plusIcon = Argon:CreateImageFromPath("./src/assets/images/plus.png")
+
 local expanded = {}
+local createMenu = {
+	visible = false,
+	x = 0,
+	y = 0,
+	parent = nil,
+	suppressInput = false,
+}
+local createClassItems = nil
+
+local canInteract = true
+
+local nonCreatableClassNames = {
+	DataModel = true,
+	Instance = true,
+	GuiObject = true,
+	ValueBase = true,
+	WorldObject2D = true,
+}
+
+local function getCreateClassItems()
+	if createClassItems then
+		return createClassItems
+	end
+
+	local classes = if Instance.getClasses then Instance.getClasses() else {}
+	local names = {}
+
+	for className, classData in pairs(classes) do
+		if not classData.non_creatable and not nonCreatableClassNames[className] then
+			table.insert(names, className)
+		end
+	end
+
+	table.sort(names)
+
+	createClassItems = {}
+	for _, className in ipairs(names) do
+		local itemClassName = className
+		table.insert(createClassItems, {
+			text = itemClassName,
+			callback = function()
+				local parent = createMenu.parent
+				if not parent or parent.Destroyed then
+					return
+				end
+
+				local ok, created = pcall(Instance.new, itemClassName)
+				if not ok or not created then
+					warn(`Failed to create {itemClassName}: {created}`)
+					return
+				end
+
+				created.Parent = parent
+				expanded[parent] = true
+				Selection.Set({ created })
+			end,
+		})
+	end
+
+	return createClassItems
+end
 
 local uiScale = 1
 
@@ -54,9 +125,47 @@ local serviceOrder = {
 	"TestService",
 }
 
-local explorerSearch = ""
 local visibleRowCount = 0
 local contentHeight = 0
+local explorerSearch = ""
+
+local lastClickedInstance = nil
+local lastClickTime = 0
+local DOUBLE_CLICK_TIME = 0.3
+
+local function textMatches(value, query)
+	return string.find(string.lower(tostring(value or "")), query, 1, true) ~= nil
+end
+
+local function instanceMatchesTree(instance, query)
+	if instance.ExplorerHidden then
+		return false
+	end
+	if textMatches(instance.Name, query) or textMatches(instance.ClassName, query) then
+		return true
+	end
+	for _, child in ipairs(instance:GetChildren()) do
+		if instanceMatchesTree(child, query) then
+			return true
+		end
+	end
+	return false
+end
+
+local function clickedInstance(instance)
+	local now = os.clock()
+
+	if lastClickedInstance == instance and (now - lastClickTime) <= DOUBLE_CLICK_TIME then
+		lastClickedInstance = nil
+		lastClickTime = 0
+		return true
+	end
+
+	lastClickedInstance = instance
+	lastClickTime = now
+
+	return false
+end
 
 renderer.Pool.new("2d", function()
 	local dt = renderer.RuntimeLibrary.dt
@@ -120,7 +229,12 @@ renderer.Pool.new("2d", function()
 						TextColor = { R = 1, G = 1, B = 1, A = 1 },
 						PlaceholderColor = { R = 0.5, G = 0.5, B = 0.5, A = 1 },
 
+						ReadOnly = not canInteract,
+
 						placeholder = "Search Objects...",
+						OnChange = function(text)
+							explorerSearch = text
+						end,
 						OnSubmit = function(text)
 							explorerSearch = text
 						end,
@@ -133,17 +247,42 @@ renderer.Pool.new("2d", function()
 							return
 						end
 
+						local searchQuery = string.lower(explorerSearch)
+						local searching = searchQuery ~= ""
+						local selfMatches = not searching
+							or textMatches(instance.Name, searchQuery)
+							or textMatches(instance.ClassName, searchQuery)
+						local childMatches = false
+						local children = instance:GetChildren()
+
+						if searching then
+							for _, child in ipairs(children) do
+								if instanceMatchesTree(child, searchQuery) then
+									childMatches = true
+									break
+								end
+							end
+						end
+
+						if searching and not selfMatches and not childMatches then
+							return false
+						end
+
 						visit(instance, depth, state.y, state.rowIndex)
 
-						state.y += rowHeightStep
-						state.rowIndex += 1
-						visibleRowCount += 1
+						if not state.countOnly then
+							state.y += rowHeightStep
+							state.rowIndex += 1
+							visibleRowCount += 1
+						end
 
-						if expanded[instance] then
-							for _, child in ipairs(instance:GetChildren()) do
+						if searching or expanded[instance] then
+							for _, child in ipairs(children) do
 								walkVisible(child, depth + 1, state, visit)
 							end
 						end
+
+						return true
 					end
 
 					local services = game:GetChildren()
@@ -233,6 +372,7 @@ renderer.Pool.new("2d", function()
 						local indent = params.x + contentPadding + (depth * indentSize)
 						local selection = Selection.Get()
 						local isSelected = selection and selection[1] == instance or false
+						local textX = indent + (36 * uiScale)
 
 						local isInRect = renderer:isMouseInRect({
 							x = params.x + (6 * uiScale),
@@ -240,7 +380,7 @@ renderer.Pool.new("2d", function()
 							width = params.width - (12 * uiScale),
 							height = rowHeight,
 						})
-						if isInRect then
+						if isInRect and canInteract then
 							local x = params.x + (6 * uiScale)
 							local y = rowY - (18 * uiScale)
 							local width = params.width - (12 * uiScale)
@@ -272,6 +412,35 @@ renderer.Pool.new("2d", function()
 								height = height - border * 2,
 								Color = Argon:RGBA(44, 44, 44),
 							})
+
+							local textWidth = Argon:MeasureText(renderer.Window, instance.Name, textSize, theme.Font)
+							local plusRect = {
+								x = textX + textWidth + (6 * uiScale),
+								y = rowY - (14 * uiScale),
+								width = imageSize,
+								height = imageSize,
+							}
+
+							Immco.Image({
+								x = plusRect.x,
+								y = plusRect.y,
+								width = plusRect.width,
+								height = plusRect.height,
+								Image = plusIcon,
+								theme = theme,
+								engine_window = renderer.Window,
+							}, dt)
+
+							if renderer:HasClicked(plusRect) and canInteract then
+								Selection.Set({ instance })
+								createMenu.visible = true
+								createMenu.x = plusRect.x + plusRect.width + (4 * uiScale)
+								createMenu.y = plusRect.y
+								createMenu.parent = instance
+								createMenu.suppressInput = true
+								canInteract = false
+								renderer.UpdateCamera = false
+							end
 
 							Argon:Restore(renderer.Window)
 						end
@@ -322,15 +491,30 @@ renderer.Pool.new("2d", function()
 							Argon:Restore(renderer.Window)
 						end
 
-						if
-							renderer:HasClicked({
-								x = params.x + (6 * uiScale),
-								y = rowY - (18 * uiScale),
-								width = params.width - (12 * uiScale),
-								height = rowHeight,
-							})
-						then
-							Selection.Set({ instance })
+						local rowRect = {
+							x = params.x + (6 * uiScale),
+							y = rowY - (18 * uiScale),
+							width = params.width - (12 * uiScale),
+							height = rowHeight,
+						}
+
+						if renderer:HasClicked(rowRect) and canInteract then
+							if clickedInstance(instance) then
+								-- Double click
+								if instance:IsA("ScriptContainer") then
+									ishared.StudioSystem:Fire("toggle_code_editor", true)
+									return
+								end
+
+								ishared.StudioSystem:Fire("toggle_code_editor", false)
+
+								if hasChildren then
+									expanded[instance] = not expanded[instance]
+								end
+							else
+								-- First click
+								Selection.Set({ instance })
+							end
 						end
 
 						if hasChildren then
@@ -352,7 +536,7 @@ renderer.Pool.new("2d", function()
 									y = rowY - (14 * uiScale),
 									width = imageSize,
 									height = imageSize,
-								})
+								}) and canInteract
 							then
 								expanded[instance] = not expanded[instance]
 							end
@@ -369,11 +553,10 @@ renderer.Pool.new("2d", function()
 						}, dt)
 
 						Immco.Text({
-							x = indent + (36 * uiScale),
+							x = textX,
 							y = rowY,
 							TextSize = textSize,
 							theme = theme,
-							Font = Argon:CreateFont(theme.Font),
 							text = instance.Name,
 							Color = theme.TextColor,
 							engine_window = renderer.Window,
@@ -388,6 +571,35 @@ renderer.Pool.new("2d", function()
 					end
 				end,
 			}, dt)
+
+			if createMenu.visible then
+				local menuHeight = math.max(120, math.min(absoluteSize.Y - 55, 420))
+				local menuX = math.min(createMenu.x, absolutePosition.X + absoluteSize.X - 230)
+				local menuY = math.min(createMenu.y, absolutePosition.Y + absoluteSize.Y - menuHeight - 8)
+
+				Immco.ContextMenu({
+					id = "explorer-create-instance",
+					x = math.max(absolutePosition.X + 8, menuX),
+					y = math.max(absolutePosition.Y + 35, menuY),
+					width = 220,
+					MaxHeight = menuHeight,
+					items = getCreateClassItems(),
+					EnableSearch = true,
+					SearchPlaceholder = "Search classes...",
+					SuppressInput = createMenu.suppressInput,
+					RetainedStorage = contextMenuStorage,
+					renderer = renderer,
+					engine_window = renderer.Window,
+					theme = theme,
+					onClose = function()
+						createMenu.visible = false
+						createMenu.parent = nil
+						canInteract = true
+						renderer.UpdateCamera = true
+					end,
+				}, dt)
+				createMenu.suppressInput = false
+			end
 		end,
 	}, dt)
 end)

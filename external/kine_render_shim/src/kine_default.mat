@@ -4,39 +4,110 @@ material {
     blending : opaque,
     requires : [ uv0 ],
     parameters : [
-        { type : float4,   name : baseColor },
-        { type : float,    name : roughness },
-        { type : float,    name : metallic },
-        { type : float,    name : hasTexture },
+        { type : float4,    name : baseColor },
+        { type : float,     name : roughness },
+        { type : float,     name : metallic },
+        { type : float,     name : hasTexture },
         { type : sampler2d, name : baseColorMap },
-        { type : float,    name : hasNormalMap },
+        { type : float,     name : hasNormalMap },
         { type : sampler2d, name : normalMap },
-        { type : float,    name : hasOrmMap },
+        { type : float,     name : hasOrmMap },
         { type : sampler2d, name : ormMap },
-        { type : float2,   name : uvScale }
+        { type : float,     name : hasHeightMap },
+        { type : sampler2d, name : heightMap },
+        { type : float,     name : heightScale },
+        { type : float2,    name : uvScale }
     ]
+}
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        if (materialParams.hasHeightMap > 0.5 && materialParams.heightScale > 0.00001) {
+            vec2 uv = material.uv0 * materialParams.uvScale;
+            float height = textureLod(materialParams_heightMap, uv, 0.0).r;
+
+            // Move actual vertices in world units so the height map changes
+            // the silhouette. The centered range lets mortar recede while
+            // the blocks project beyond the original part surface.
+            material.worldPosition.xyz += normalize(material.worldNormal)
+                * ((height - 0.5) * materialParams.heightScale);
+        }
+    }
 }
 fragment {
     void material(inout MaterialInputs material) {
+        vec2 uv = getUV0() * materialParams.uvScale;
+
+        // -------------------------------------------------------------------
+        // Parallax Occlusion Mapping
+        // Must run before any map samples so every downstream sample uses the
+        // same perturbed UV.  dFdx/dFdy are computed on the *original* UV
+        // (before the loop starts moving it) to avoid blocky artefacts that
+        // appear when derivatives are computed inside a loop with a break.
+        // -------------------------------------------------------------------
+        if (materialParams.hasHeightMap > 0.5 && materialParams.heightScale > 0.00001) {
+            vec2 uvDx = dFdx(uv);
+            vec2 uvDy = dFdy(uv);
+
+            // World-to-tangent: getWorldTangentFrame() is an orthonormal TBN
+            // matrix (world space), so its transpose == its inverse.
+            mat3 worldToTangent = transpose(getWorldTangentFrame());
+            vec3 v = normalize(worldToTangent * (getWorldCameraPosition() - getWorldPosition()));
+
+            // Adaptive layer count: more layers face-on, fewer at grazing angles.
+            float NdotV   = abs(dot(getWorldGeometricNormalVector(), getWorldViewVector()));
+            float numLayers   = mix(48.0, 8.0, NdotV);
+            float layerDepth  = 1.0 / numLayers;
+            float currLayerDepth = 0.0;
+
+            // Clamp v.z to avoid division blowup at extreme grazing angles.
+            float vz = max(v.z, 0.15);
+            // heightScale is expressed in world units for vertex displacement.
+            // Material tiles are approximately four studs wide, so convert it
+            // to a tile-relative offset for parallax traversal.
+            float parallaxScale = materialParams.heightScale * 0.25;
+            vec2 deltaUV = v.xy * parallaxScale / (vz * numLayers);
+
+            vec2  currUV = uv;
+            float h = textureGrad(materialParams_heightMap, currUV, uvDx, uvDy).r;
+
+            for (float i = 0.0; i < numLayers; i += 1.0) {
+                currLayerDepth += layerDepth;
+                currUV -= deltaUV;
+                h = textureGrad(materialParams_heightMap, currUV, uvDx, uvDy).r;
+                if (h < currLayerDepth) break;
+            }
+
+            // Interpolate between the last two steps (parallax occlusion).
+            vec2  prevUV    = currUV + deltaUV;
+            float nextDepth = h - currLayerDepth;
+            float prevDepth = textureGrad(materialParams_heightMap, prevUV, uvDx, uvDy).r
+                              - currLayerDepth + layerDepth;
+            uv = mix(currUV, prevUV, nextDepth / (nextDepth - prevDepth));
+        }
+
         prepareMaterial(material);
 
-        vec2 uv = getUV0() * materialParams.uvScale;
+        // Normal maps are tangent-space inputs. prepareMaterial() initializes
+        // MaterialInputs, so custom values must be assigned after it.
+        if (materialParams.hasNormalMap > 0.5) {
+            material.normal = texture(materialParams_normalMap, uv).xyz * 2.0 - 1.0;
+        }
+
+        // -------------------------------------------------------------------
+        // Surface properties
+        // -------------------------------------------------------------------
         vec4 color = materialParams.baseColor;
         if (materialParams.hasTexture > 0.5) {
             color *= texture(materialParams_baseColorMap, uv);
         }
 
         float roughness = materialParams.roughness;
-        float metallic = materialParams.metallic;
+        float metallic  = materialParams.metallic;
         if (materialParams.hasOrmMap > 0.5) {
             vec3 orm = texture(materialParams_ormMap, uv).rgb;
             material.ambientOcclusion = orm.r;
             roughness = orm.g;
-            metallic = orm.b;
-        }
-
-        if (materialParams.hasNormalMap > 0.5) {
-            material.normal = texture(materialParams_normalMap, uv).xyz * 2.0 - 1.0;
+            metallic  = orm.b;
         }
 
         material.baseColor = color;

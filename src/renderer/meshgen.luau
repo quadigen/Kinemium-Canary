@@ -5,6 +5,8 @@ local TWO_PI = math.pi * 2
 local EPSILON = 1e-8
 local FILAMENT_VERTEX_FLOATS = 8
 local FILAMENT_VERTEX_BYTES = FILAMENT_VERTEX_FLOATS * 4
+local TERRAIN_WEIGHT_FLOATS = 8
+local TERRAIN_WEIGHT_BYTES = TERRAIN_WEIGHT_FLOATS * 4
 local MAX_UINT16 = 65535
 local activeWindow = nil
 
@@ -671,6 +673,7 @@ function meshgen.buildMeshData(vertices, indices, opts)
 	end
 
 	local vertexData = ffi.alloc(vcount * FILAMENT_VERTEX_BYTES, 4)
+	local materialWeightData = if opts and opts.terrainMaterials then ffi.alloc(vcount * TERRAIN_WEIGHT_BYTES, 4) else nil
 	local indexData = ffi.alloc(icount * 2, 2)
 	for i = 1, vcount do
 		local v = verts[i]
@@ -683,12 +686,24 @@ function meshgen.buildMeshData(vertices, indices, opts)
 		end
 		local u, w = vec2(v.uv or v.texcoord or v.t)
 		writeFilamentVertex(vertexData, base, px, py, pz, nx, ny, nz, u, w)
+
+		if materialWeightData then
+			local weights = v.materialWeights
+			local weightBase = (i - 1) * TERRAIN_WEIGHT_BYTES
+			for weightIndex = 1, TERRAIN_WEIGHT_FLOATS do
+				local fallback = if weightIndex == 1 then 1 else 0
+				materialWeightData:writef32(weightBase + (weightIndex - 1) * 4, weights and weights[weightIndex] or fallback)
+			end
+		end
 	end
 
 	for i = 1, icount do
 		local index = idxs[i]
 		if type(index) ~= "number" or index % 1 ~= 0 or index < 0 or index >= vcount then
 			ffi.free(vertexData)
+			if materialWeightData then
+				ffi.free(materialWeightData)
+			end
 			ffi.free(indexData)
 			warn(`meshgen.buildMeshData: index {i} is outside the vertex range`)
 			return nil
@@ -699,6 +714,7 @@ function meshgen.buildMeshData(vertices, indices, opts)
 	return {
 		_type = "FilamentMeshData",
 		vertexData = vertexData,
+		materialWeightData = materialWeightData,
 		indexData = indexData,
 		vertexCount = vcount,
 		indexCount = icount,
@@ -718,8 +734,12 @@ function meshgen.destroyMeshData(meshData)
 	if meshData.indexData and meshData.indexData ~= ffi.null then
 		ffi.free(meshData.indexData)
 	end
+	if meshData.materialWeightData and meshData.materialWeightData ~= ffi.null then
+		ffi.free(meshData.materialWeightData)
+	end
 	meshData.vertexData = nil
 	meshData.indexData = nil
+	meshData.materialWeightData = nil
 	meshData.released = true
 end
 
@@ -763,13 +783,18 @@ local function createFilamentMesh(meshData, opts)
 		return nil
 	end
 
-	return argon:CreateCustomMesh(
-		window,
-		meshData.vertexData,
-		meshData.vertexCount,
-		meshData.indexData,
-		meshData.indexCount
-	)
+	if meshData.materialWeightData then
+		return argon:CreateTerrainMesh(
+			window,
+			meshData.vertexData,
+			meshData.materialWeightData,
+			meshData.vertexCount,
+			meshData.indexData,
+			meshData.indexCount
+		)
+	end
+
+	return argon:CreateCustomMesh(window, meshData.vertexData, meshData.vertexCount, meshData.indexData, meshData.indexCount)
 end
 
 function meshgen.buildMesh(vertices, indices, opts)

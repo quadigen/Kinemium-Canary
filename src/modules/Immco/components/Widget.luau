@@ -3,6 +3,23 @@ local Titlebar = require("./Titlebar")
 local Rectangle = require("./Rectangle")
 local argon = require("@Argon")
 
+local function withTransparency(color, transparency: number?)
+	if not color or transparency == nil then
+		return color
+	end
+
+	return {
+		R = color.R,
+		G = color.G,
+		B = color.B,
+		A = (color.A or 1) * math.clamp(1 - transparency, 0, 1),
+	}
+end
+
+local function isVisibleColor(color): boolean
+	return color ~= nil and (color.A == nil or color.A > 0)
+end
+
 return function(params: typedefs.WidgetParams, dt: number)
 	local window = params.engine_window
 	local theme = params.theme
@@ -19,26 +36,32 @@ return function(params: typedefs.WidgetParams, dt: number)
 		height = params.height,
 	}, cornerRadius, cornerRadius)
 
-	Rectangle({
-		x = params.x,
-		y = params.y,
-		width = params.width,
-		height = params.height,
-		Color = theme.ThirdColor,
-		theme = theme,
-		engine_window = window,
-	}, dt)
+	local backgroundColor = withTransparency(params.Color or theme.ThirdColor, params.BackgroundTransparency)
+	if isVisibleColor(backgroundColor) then
+		Rectangle({
+			x = params.x,
+			y = params.y,
+			width = params.width,
+			height = params.height,
+			Color = backgroundColor,
+			theme = theme,
+			engine_window = window,
+		}, dt)
+	end
 
-	Rectangle({
-		x = params.x,
-		y = params.y,
-		width = params.width,
-		height = params.height,
-		Color = theme.SecondaryColor,
-		theme = theme,
-		engine_window = window,
-		isOutline = true,
-	}, dt)
+	local outlineColor = withTransparency(params.OutlineColor or theme.SecondaryColor, params.OutlineTransparency)
+	if isVisibleColor(outlineColor) then
+		Rectangle({
+			x = params.x,
+			y = params.y,
+			width = params.width,
+			height = params.height,
+			Color = outlineColor,
+			theme = theme,
+			engine_window = window,
+			isOutline = true,
+		}, dt)
+	end
 
 	if params.EnableTitlebar or params.title then
 		Titlebar({

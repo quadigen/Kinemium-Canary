@@ -9,6 +9,8 @@
 #include <Jolt/Physics/PhysicsSettings.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
+#include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
+#include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Body/Body.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
@@ -558,6 +560,62 @@ JPH_ShapeRef JPH_SphereShape_Create(float radius)
     JPH::Shape* shape = result.Get().GetPtr();
     shape->AddRef();
     return shape;
+}
+
+JPH_ShapeRef JPH_ConvexHullShape_Create(
+    const JPH_Vec3* points,
+    uint32_t pointCount,
+    float maxConvexRadius)
+{
+    if (points == nullptr || pointCount < 4)
+        return nullptr;
+
+    JPH::Array<JPH::Vec3> hullPoints;
+    hullPoints.reserve(pointCount);
+    for (uint32_t i = 0; i < pointCount; ++i)
+        hullPoints.push_back(ToJPH(points[i]));
+
+    JPH::ConvexHullShapeSettings settings(hullPoints, maxConvexRadius);
+    JPH::ShapeSettings::ShapeResult result = settings.Create();
+    if (result.HasError())
+        return nullptr;
+
+    JPH::Shape* shape = result.Get().GetPtr();
+    shape->AddRef();
+    return shape;
+}
+
+JPH_ShapeRef JPH_MeshShape_Create(const JPH_Triangle* triangles, uint32_t triangleCount)
+{
+    if (triangles == nullptr || triangleCount == 0)
+        return nullptr;
+
+    JPH::TriangleList triangleList;
+    triangleList.reserve(triangleCount);
+    for (uint32_t i = 0; i < triangleCount; ++i)
+    {
+        const JPH_Triangle& triangle = triangles[i];
+        triangleList.emplace_back(
+            ToJPH(triangle.v1),
+            ToJPH(triangle.v2),
+            ToJPH(triangle.v3),
+            0);
+    }
+
+    JPH::MeshShapeSettings settings(triangleList);
+    JPH::ShapeSettings::ShapeResult result = settings.Create();
+    if (result.HasError())
+        return nullptr;
+
+    JPH::Shape* shape = result.Get().GetPtr();
+    shape->AddRef();
+    return shape;
+}
+
+void JPH_Shape_Destroy(JPH_ShapeRef shape)
+{
+    if (shape != nullptr)
+        ToShape(shape)->Release();
 }
 
 JPH_BodyCreationSettingsRef JPH_BodyCreationSettings_Create3(

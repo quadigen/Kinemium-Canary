@@ -5,6 +5,16 @@ local Argon = require("@Argon")
 local Selection = game:GetService("Selection")
 local PropertyCategories = require("@propertyCategories")
 local inspectorStorage = {}
+local ColorSequence = require("@ColorSequence")
+local ColorSequenceKeypoint = require("@ColorSequenceKeypoint")
+
+if IsServer then
+	return
+end
+
+if IsClient then
+	return
+end
 
 repeat
 	task.wait()
@@ -61,6 +71,156 @@ local categoryOrder = {
 }
 
 local adapters = {
+	ColorSequence = function(prop, firstObj, prop_x, prop_y, dt, width)
+		local value = prop.value
+		local keypoints = value.Keypoints or {}
+
+		if #keypoints == 0 then
+			return
+		end
+
+		local gap = 4
+		local keypointWidth = (width - gap * (#keypoints - 1)) / #keypoints
+
+		for index, keypoint in ipairs(keypoints) do
+			local color = keypoint.Value
+			local time = keypoint.Time
+			local x = prop_x + (index - 1) * (keypointWidth + gap)
+
+			local function rebuildKeypoint(newTime, newColor)
+				local newKeypoints = {}
+
+				for i, current in ipairs(keypoints) do
+					if i == index then
+						newKeypoints[i] = ColorSequenceKeypoint.new(newTime or current.Time, newColor or current.Value)
+					else
+						newKeypoints[i] = ColorSequenceKeypoint.new(current.Time, current.Value)
+					end
+				end
+
+				table.sort(newKeypoints, function(a, b)
+					return a.Time < b.Time
+				end)
+
+				firstObj[prop.name] = ColorSequence.new(newKeypoints)
+			end
+
+			local rgbWidth = (keypointWidth - 8) / 3
+
+			local function colorInput(id, offset, component, background)
+				Immco.TextInput({
+					x = x + offset,
+					y = prop_y,
+					width = rgbWidth,
+					height = 16,
+					id = prop.name .. "_" .. index .. "_" .. id,
+					RetainedStorage = inspectorStorage,
+					renderer = renderer,
+					theme = theme,
+
+					Color = {
+						R = background.R,
+						G = background.G,
+						B = background.B,
+						A = 1,
+					},
+
+					FocusColor = {
+						R = background.R + 0.05,
+						G = background.G + 0.05,
+						B = background.B + 0.05,
+						A = 1,
+					},
+
+					TextColor = { R = 1, G = 1, B = 1, A = 1 },
+					PlaceholderColor = { R = 0.5, G = 0.5, B = 0.5, A = 1 },
+
+					placeholder = string.format("%.2f", color[component]),
+
+					OnSubmit = function(text)
+						local number = tonumber(text)
+
+						if not number then
+							return
+						end
+
+						number = math.clamp(number, 0, 1)
+
+						local newColor = Color3.new(
+							component == "R" and number or color.R,
+							component == "G" and number or color.G,
+							component == "B" and number or color.B
+						)
+
+						rebuildKeypoint(nil, newColor)
+					end,
+
+					engine_window = renderer.Window,
+				}, dt)
+			end
+
+			colorInput("R", 0, "R", {
+				R = 0.35,
+				G = 0.08,
+				B = 0.08,
+			})
+
+			colorInput("G", rgbWidth + 4, "G", {
+				R = 0.08,
+				G = 0.35,
+				B = 0.08,
+			})
+
+			colorInput("B", (rgbWidth + 4) * 2, "B", {
+				R = 0.08,
+				G = 0.15,
+				B = 0.35,
+			})
+
+			Immco.TextInput({
+				x = x,
+				y = prop_y + 20,
+				width = keypointWidth,
+				height = 16,
+				id = prop.name .. "_" .. index .. "_Time",
+				RetainedStorage = inspectorStorage,
+				renderer = renderer,
+				theme = theme,
+
+				Color = {
+					R = 0.15,
+					G = 0.15,
+					B = 0.15,
+					A = 1,
+				},
+
+				FocusColor = {
+					R = 0.2,
+					G = 0.2,
+					B = 0.25,
+					A = 1,
+				},
+
+				TextColor = { R = 1, G = 1, B = 1, A = 1 },
+				PlaceholderColor = { R = 0.5, G = 0.5, B = 0.5, A = 1 },
+
+				placeholder = string.format("%.2f", time),
+
+				OnSubmit = function(text)
+					local number = tonumber(text)
+
+					if not number then
+						return
+					end
+
+					rebuildKeypoint(math.clamp(number, 0, 1), nil)
+				end,
+
+				engine_window = renderer.Window,
+			}, dt)
+		end
+	end,
+
 	boolean = function(prop, firstObj, prop_x, prop_y, dt)
 		Immco.Checkbox({
 			x = prop_x,
@@ -113,6 +273,29 @@ local adapters = {
 			placeholder = tostring(prop.value),
 			OnSubmit = function(text)
 				firstObj[prop.name] = text
+			end,
+			engine_window = renderer.Window,
+		}, dt)
+	end,
+
+	number = function(prop, firstObj, prop_x, prop_y, dt, width)
+		Immco.TextInput({
+			x = prop_x,
+			y = prop_y,
+			width = width,
+			height = 16,
+			id = prop.name,
+			RetainedStorage = inspectorStorage,
+			renderer = renderer,
+			theme = theme,
+			ReadOnly = readonly[prop.name] ~= nil,
+			Color = { R = 0.15, G = 0.15, B = 0.15, A = 1 },
+			FocusColor = { R = 0.2, G = 0.2, B = 0.25, A = 1 },
+			TextColor = { R = 1, G = 1, B = 1, A = 1 },
+			PlaceholderColor = { R = 0.5, G = 0.5, B = 0.5, A = 1 },
+			placeholder = tostring(prop.value),
+			OnSubmit = function(text)
+				firstObj[prop.name] = tonumber(text)
 			end,
 			engine_window = renderer.Window,
 		}, dt)
@@ -174,6 +357,78 @@ local adapters = {
 		input("R", prop_x, "X", { R = 0.35, G = 0.08, B = 0.08 })
 		input("G", prop_x + boxWidth + 4, "Y", { R = 0.08, G = 0.35, B = 0.08 })
 		input("B", prop_x + (boxWidth + 4) * 2, "Z", { R = 0.08, G = 0.15, B = 0.35 })
+	end,
+
+	UDim2 = function(prop, firstObj, prop_x, prop_y, dt, width)
+		local value = prop.value
+		local boxWidth = (width - 4) / 2
+
+		local function input(id, x, component, color)
+			local udim = value[component]
+
+			Immco.TextInput({
+				x = x,
+				y = prop_y,
+				width = boxWidth,
+				height = 16,
+				id = prop.name .. "_" .. id,
+				RetainedStorage = inspectorStorage,
+				renderer = renderer,
+				theme = theme,
+
+				Color = {
+					R = color.R,
+					G = color.G,
+					B = color.B,
+					A = 1,
+				},
+
+				FocusColor = {
+					R = color.R + 0.05,
+					G = color.G + 0.05,
+					B = color.B + 0.05,
+					A = 1,
+				},
+
+				TextColor = { R = 1, G = 1, B = 1, A = 1 },
+				PlaceholderColor = { R = 0.5, G = 0.5, B = 0.5, A = 1 },
+
+				placeholder = tostring(udim.Scale) .. ", " .. tostring(udim.Offset),
+
+				OnSubmit = function(text)
+					local scale, offset = text:match("^%s*([%-%.%d]+)%s*,%s*([%-%.%d]+)%s*$")
+
+					scale = tonumber(scale)
+					offset = tonumber(offset)
+
+					if not scale or not offset then
+						return
+					end
+
+					local current = firstObj[prop.name]
+
+					if component == "X" then
+						firstObj[prop.name] = UDim2.new(scale, offset, current.Y.Scale, current.Y.Offset)
+					else
+						firstObj[prop.name] = UDim2.new(current.X.Scale, current.X.Offset, scale, offset)
+					end
+				end,
+
+				engine_window = renderer.Window,
+			}, dt)
+		end
+
+		input("X", prop_x, "X", {
+			R = 0.35,
+			G = 0.08,
+			B = 0.08,
+		})
+
+		input("Y", prop_x + boxWidth + 4, "Y", {
+			R = 0.08,
+			G = 0.35,
+			B = 0.08,
+		})
 	end,
 
 	Color3 = function(prop, firstObj, prop_x, prop_y, dt, width)

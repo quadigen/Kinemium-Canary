@@ -13,5 +13,7 @@ lib.Scroller = require("./Immco/components/Scroller")
 lib.Dropdown = require("./Immco/components/Dropdown")
 lib.Tooltip = require("./Immco/components/Tooltip")
 lib.ColorPicker = require("./Immco/components/ColorPicker")
+lib.Table = require("./Immco/components/Table")
+lib.ContextMenu = require("./Immco/components/ContextMenu")
 
 return lib

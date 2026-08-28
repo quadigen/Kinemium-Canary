@@ -42,9 +42,11 @@ struct KineVulkanCompositor {
     VkSemaphore filamentImageReadySemaphore = VK_NULL_HANDLE;
     uint32_t currentImageIndex = UINT32_MAX;
     KineSkiaSurface* currentSkiaSurface = nullptr;
+    KineSkiaSurface* overlaySkiaSurface = nullptr;
     bool frameActive = false;
     bool filamentPrepared = false;
     bool filamentPresented = false;
+    bool overlayActive = false;
     VkSemaphore filamentFinishedSemaphore = VK_NULL_HANDLE;
     std::mutex filamentMutex;
     std::condition_variable filamentCondition;
@@ -915,6 +917,56 @@ static bool kine_vk_transition_current_image(
     return true;
 }
 
+static bool kine_vk_wait_for_filament(
+    KineVulkanCompositor* compositor,
+    VkSemaphore semaphore)
+{
+    if (!compositor || !semaphore) {
+        return true;
+    }
+
+    auto vkResetCommandBuffer = kine_vk_device_proc<PFN_vkResetCommandBuffer>(
+        compositor, "vkResetCommandBuffer");
+    auto vkBeginCommandBuffer = kine_vk_device_proc<PFN_vkBeginCommandBuffer>(
+        compositor, "vkBeginCommandBuffer");
+    auto vkEndCommandBuffer = kine_vk_device_proc<PFN_vkEndCommandBuffer>(
+        compositor, "vkEndCommandBuffer");
+    auto vkQueueSubmit = kine_vk_device_proc<PFN_vkQueueSubmit>(
+        compositor, "vkQueueSubmit");
+    auto vkQueueWaitIdle = kine_vk_device_proc<PFN_vkQueueWaitIdle>(
+        compositor, "vkQueueWaitIdle");
+    if (!vkResetCommandBuffer || !vkBeginCommandBuffer || !vkEndCommandBuffer ||
+        !vkQueueSubmit || !vkQueueWaitIdle || !compositor->commandBuffer) {
+        kine_vk_set_error(compositor, "required Vulkan synchronization procs unavailable for overlay");
+        return false;
+    }
+
+    vkResetCommandBuffer(compositor->commandBuffer, 0);
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    if (vkBeginCommandBuffer(compositor->commandBuffer, &beginInfo) != VK_SUCCESS ||
+        vkEndCommandBuffer(compositor->commandBuffer) != VK_SUCCESS) {
+        kine_vk_set_error(compositor, "failed to record overlay synchronization command");
+        return false;
+    }
+
+    VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    VkSubmitInfo submitInfo{};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.waitSemaphoreCount = 1;
+    submitInfo.pWaitSemaphores = &semaphore;
+    submitInfo.pWaitDstStageMask = &waitStage;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &compositor->commandBuffer;
+    if (vkQueueSubmit(compositor->graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE) != VK_SUCCESS ||
+        vkQueueWaitIdle(compositor->graphicsQueue) != VK_SUCCESS) {
+        kine_vk_set_error(compositor, "failed waiting for Filament before overlay");
+        return false;
+    }
+    return true;
+}
+
 static KineSkiaSurface* kine_vk_create_current_skia_surface(KineVulkanCompositor* compositor)
 {
     if (!compositor || !compositor->skiaContext ||
@@ -1056,6 +1108,10 @@ Kine_VulkanCompositor_Destroy(KineVulkanCompositor* compositor)
         Kine_Skia_Surface_Destroy(compositor->currentSkiaSurface);
         compositor->currentSkiaSurface = nullptr;
     }
+    if (compositor->overlaySkiaSurface) {
+        Kine_Skia_Surface_Destroy(compositor->overlaySkiaSurface);
+        compositor->overlaySkiaSurface = nullptr;
+    }
     if (compositor->skiaContext) {
         Kine_Skia_Vulkan_DestroyContext(compositor->skiaContext);
         compositor->skiaContext = nullptr;
@@ -1141,7 +1197,12 @@ Kine_VulkanCompositor_Resize(
         Kine_Skia_Surface_Destroy(compositor->currentSkiaSurface);
         compositor->currentSkiaSurface = nullptr;
     }
+    if (compositor->overlaySkiaSurface) {
+        Kine_Skia_Surface_Destroy(compositor->overlaySkiaSurface);
+        compositor->overlaySkiaSurface = nullptr;
+    }
     compositor->frameActive = false;
+    compositor->overlayActive = false;
     compositor->currentImageIndex = UINT32_MAX;
     kine_vk_destroy_swapchain_attachments(compositor);
 
@@ -1441,9 +1502,61 @@ Kine_VulkanCompositor_BeginFrame(KineVulkanCompositor* compositor)
         compositor->filamentPrepared = false;
         compositor->filamentPresented = false;
         compositor->filamentFinishedSemaphore = VK_NULL_HANDLE;
+        compositor->overlayActive = false;
     }
     compositor->lastError.clear();
     return compositor->currentSkiaSurface;
+}
+
+KINE_VULKAN_COMPOSITOR_API void*
+Kine_VulkanCompositor_BeginOverlay(KineVulkanCompositor* compositor)
+{
+    if (!compositor) {
+        return nullptr;
+    }
+    if (compositor->overlaySkiaSurface) {
+        return compositor->overlaySkiaSurface;
+    }
+
+    VkSemaphore filamentFinished = VK_NULL_HANDLE;
+    {
+        std::unique_lock<std::mutex> lock(compositor->filamentMutex);
+        if (!compositor->frameActive || !compositor->filamentPrepared) {
+            kine_vk_set_error(compositor, "overlay requires an active Filament compositor frame");
+            return nullptr;
+        }
+        constexpr auto kFilamentTimeout = std::chrono::seconds(5);
+        if (!compositor->filamentCondition.wait_for(
+                lock,
+                kFilamentTimeout,
+                [compositor] { return compositor->filamentPresented; })) {
+            kine_vk_set_error(compositor, "timed out waiting for Filament before overlay");
+            return nullptr;
+        }
+        filamentFinished = compositor->filamentFinishedSemaphore;
+    }
+
+    if (!kine_vk_wait_for_filament(compositor, filamentFinished)) {
+        return nullptr;
+    }
+
+    compositor->overlaySkiaSurface = kine_vk_create_current_skia_surface(compositor);
+    if (compositor->overlaySkiaSurface) {
+        Kine_Skia_Surface_SetBackdropFromSurface(
+            compositor->overlaySkiaSurface,
+            compositor->overlaySkiaSurface);
+    }
+    {
+        std::lock_guard<std::mutex> lock(compositor->filamentMutex);
+        compositor->overlayActive = true;
+        compositor->filamentFinishedSemaphore = VK_NULL_HANDLE;
+    }
+    if (!compositor->overlaySkiaSurface) {
+        kine_vk_set_error(compositor, "failed to create post-Filament Skia overlay surface");
+        return nullptr;
+    }
+    compositor->lastError.clear();
+    return compositor->overlaySkiaSurface;
 }
 
 KINE_VULKAN_COMPOSITOR_API int
@@ -1459,7 +1572,7 @@ Kine_VulkanCompositor_EndFrame(KineVulkanCompositor* compositor)
         if (!compositor->frameActive) {
             return 0;
         }
-        if (compositor->filamentPrepared) {
+        if (compositor->filamentPrepared && !compositor->overlayActive) {
             constexpr auto kFilamentTimeout = std::chrono::seconds(5);
             if (!compositor->filamentCondition.wait_for(
                     lock,
@@ -1482,6 +1595,9 @@ Kine_VulkanCompositor_EndFrame(KineVulkanCompositor* compositor)
     if (compositor->currentSkiaSurface) {
         Kine_Skia_Surface_Flush(compositor->currentSkiaSurface);
     }
+    if (compositor->overlaySkiaSurface) {
+        Kine_Skia_Surface_Flush(compositor->overlaySkiaSurface);
+    }
 
     if (!kine_vk_transition_current_image(
             compositor,
@@ -1503,6 +1619,10 @@ Kine_VulkanCompositor_EndFrame(KineVulkanCompositor* compositor)
         Kine_Skia_Surface_Destroy(compositor->currentSkiaSurface);
         compositor->currentSkiaSurface = nullptr;
     }
+    if (compositor->overlaySkiaSurface) {
+        Kine_Skia_Surface_Destroy(compositor->overlaySkiaSurface);
+        compositor->overlaySkiaSurface = nullptr;
+    }
     {
         std::lock_guard<std::mutex> lock(compositor->filamentMutex);
         compositor->currentImageIndex = UINT32_MAX;
@@ -1510,6 +1630,7 @@ Kine_VulkanCompositor_EndFrame(KineVulkanCompositor* compositor)
         compositor->filamentPrepared = false;
         compositor->filamentPresented = false;
         compositor->filamentFinishedSemaphore = VK_NULL_HANDLE;
+        compositor->overlayActive = false;
     }
 
     if (presented != VK_SUCCESS && presented != VK_SUBOPTIMAL_KHR) {

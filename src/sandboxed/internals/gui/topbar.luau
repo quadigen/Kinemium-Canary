@@ -1,9 +1,15 @@
-local RunService = game:GetService("RunService")
 local StudioThemeService = game:GetService("StudioThemeService")
 local Immco = require("@Immco")
 local theme = StudioThemeService.SelectedTheme
 local Argon = require("@Argon")
-local retained = {}
+
+if IsServer then
+	return
+end
+
+if IsClient then
+	return
+end
 
 repeat
 	task.wait()
@@ -74,6 +80,9 @@ renderer.Pool.new("2d", function(lib)
 	local dt = lib.dt
 	Topbar.Size = theme.TopbarCoordinates.Size
 	Topbar.Position = theme.TopbarCoordinates.Position
+	if not absolutePosition or not absoluteSize then
+		return
+	end
 
 	local buttonX = absolutePosition.X + 30
 	local buttonY = absolutePosition.Y + 2
@@ -86,9 +95,6 @@ renderer.Pool.new("2d", function(lib)
 	local separatorWidth = 1
 	local font = Argon:CreateFont(theme.Font)
 
-	if not absolutePosition then
-		return
-	end
 	if not absoluteSize then
 		return
 	end

@@ -1,9 +1,6 @@
 [submodule "external/box2d"]
 	path = external/box2d
 	url = https://github.com/erincatto/box2d
-[submodule "external/gamenetworkingsockets"]
-	path = external/gamenetworkingsockets
-	url = https://github.com/valvesoftware/gamenetworkingsockets
 [submodule "external/manifold"]
 	path = external/manifold
 	url = https://github.com/elalish/manifold

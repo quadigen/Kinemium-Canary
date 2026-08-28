@@ -31,8 +31,9 @@ function datatypes:Init(datamodel, renderer, types)
 			end
 
 			types[stem] = result
+			datatypes[stem] = result
 			if type(types[stem]) == "table" then
-				types[stem].__type = moduleName
+				types[stem].__type = stem
 				types[stem].__datatype = true
 			end
 		else
@@ -55,6 +56,7 @@ function datatypes:Init(datamodel, renderer, types)
 			end
 			kilang:remove(thread)
 			types[moduleName] = result
+			datatypes[moduleName] = result
 
 			if type(types[moduleName]) == "table" then
 				types[moduleName].__type = moduleName

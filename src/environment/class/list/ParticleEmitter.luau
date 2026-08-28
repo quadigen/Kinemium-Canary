@@ -3,15 +3,15 @@ local Vector2 = require("@Vector2")
 local Vector3 = require("@Vector3")
 local Color3 = require("@Color3")
 local CFrame = require("@CFrame")
+local argon = require("@Argon")
 local Enum = require("@EnumMap")
 local NumberSequence = require("@NumberSequence")
 local NumberSequenceKeypoint = require("@NumberSequenceKeypoint")
 local ColorSequence = require("@ColorSequence")
 local NumberRange = require("@NumberRange")
 local ColorSequenceKeypoint = require("@ColorSequenceKeypoint")
-local zembed = require("@zembed")
 
-local BLEND_MIX = 0
+local PARTICLE_ITEM_SIZE = 68
 
 local function getRange(value, defaultMin, defaultMax)
 	if type(value) == "number" then
@@ -46,26 +46,6 @@ local function clamp01(v)
 	return v
 end
 
-local function resolveTransparencyMode(value)
-	if type(value) == "number" then
-		return value
-	end
-	if type(value) == "table" and value.Value ~= nil then
-		return value.Value
-	end
-	return const.R3D_TRANSPARENCY_PREPASS
-end
-
-local function resolveBillboardMode(value)
-	if type(value) == "number" then
-		return value
-	end
-	if type(value) == "table" and value.Value ~= nil then
-		return value.Value
-	end
-	return const.R3D_BILLBOARD_FRONT
-end
-
 local function resolveCullMode(value)
 	if type(value) == "number" then
 		return value
@@ -76,25 +56,8 @@ local function resolveCullMode(value)
 	return 1
 end
 
-local function resolveBlendMode(value)
-	if type(value) == "number" then
-		return value
-	end
-	if type(value) == "table" and value.Value ~= nil then
-		return value.Value
-	end
-	return BLEND_MIX
-end
-
 local function getVector2(value, fallback)
 	if type(value) == "table" and value.__type == "Vector2" then
-		return value
-	end
-	return fallback
-end
-
-local function getColor3(value, fallback)
-	if type(value) == "table" and value.__type == "Color3" then
 		return value
 	end
 	return fallback
@@ -213,28 +176,6 @@ local function buildDefaultSize()
 	})
 end
 
-local function createMaterial(texturePath)
-	local baseMaterial = adapter.lib.R3D_GetDefaultMaterial()
-	local material = buffer.create(r3dstructs.R3D_Material:size())
-	buffer.copy(material, 0, baseMaterial, 0, r3dstructs.R3D_Material:size())
-
-	if type(texturePath) == "string" and texturePath ~= "" then
-		texturePath = zembed.AssetPath(texturePath)
-		local ok, data = pcall(zune.fs.readFileSync, texturePath, true)
-		if ok and data then
-			local ext = lib.GetFileExtension(texturePath)
-			local okLoad, map =
-				pcall(adapter.lib.R3D_LoadAlbedoMapFromMemory, ext, data, buffer.len(data), adapter.const.WHITE)
-			if okLoad then
-				buffer.copy(material, r3dstructs.R3D_Material:offset("albedo"), map, 0, r3dstructs.R3D_AlbedoMap:size())
-				return material, map
-			end
-		end
-	end
-
-	return material, nil
-end
-
 local propTable = {
 	Enabled = true,
 	Rate = 20,
@@ -277,74 +218,6 @@ local propTable = {
 	CastShadow = true,
 }
 
-local function writePositionMapped(mappedPosition)
-	return function(offset, pos)
-		mappedPosition:writef32(offset, pos.X)
-		mappedPosition:writef32(offset + 4, pos.Y)
-		mappedPosition:writef32(offset + 8, pos.Z)
-	end
-end
-
-local function writeRotationMapped(mappedRotation)
-	return function(offset, qx, qy, qz, qw)
-		mappedRotation:writef32(offset, qx)
-		mappedRotation:writef32(offset + 4, qy)
-		mappedRotation:writef32(offset + 8, qz)
-		mappedRotation:writef32(offset + 12, qw)
-	end
-end
-
-local function writeScaleMapped(mappedScale)
-	return function(offset, size)
-		mappedScale:writef32(offset, size)
-		mappedScale:writef32(offset + 4, size)
-		mappedScale:writef32(offset + 8, size)
-	end
-end
-
-local function writeColorMapped(mappedColor)
-	return function(offset, r, g, b, a)
-		mappedColor:writeu8(offset, r)
-		mappedColor:writeu8(offset + 1, g)
-		mappedColor:writeu8(offset + 2, b)
-		mappedColor:writeu8(offset + 3, a)
-	end
-end
-
-local function writePositionBuffer(targetBuffer)
-	return function(offset, pos)
-		buffer.writef32(targetBuffer, offset, pos.X)
-		buffer.writef32(targetBuffer, offset + 4, pos.Y)
-		buffer.writef32(targetBuffer, offset + 8, pos.Z)
-	end
-end
-
-local function writeRotationBuffer(targetBuffer)
-	return function(offset, qx, qy, qz, qw)
-		buffer.writef32(targetBuffer, offset, qx)
-		buffer.writef32(targetBuffer, offset + 4, qy)
-		buffer.writef32(targetBuffer, offset + 8, qz)
-		buffer.writef32(targetBuffer, offset + 12, qw)
-	end
-end
-
-local function writeScaleBuffer(targetBuffer)
-	return function(offset, size)
-		buffer.writef32(targetBuffer, offset, size)
-		buffer.writef32(targetBuffer, offset + 4, size)
-		buffer.writef32(targetBuffer, offset + 8, size)
-	end
-end
-
-local function writeColorBuffer(targetBuffer)
-	return function(offset, r, g, b, a)
-		buffer.writeu8(targetBuffer, offset, r)
-		buffer.writeu8(targetBuffer, offset + 1, g)
-		buffer.writeu8(targetBuffer, offset + 2, b)
-		buffer.writeu8(targetBuffer, offset + 3, a)
-	end
-end
-
 return {
 	class = "ParticleEmitter",
 
@@ -355,155 +228,37 @@ return {
 			return instance
 		end
 
-		local particleMesh = adapter.lib.R3D_GenMeshQuad(1, 1, 1, 1, vector.create(0, 0, 1))
-		local particleMaterial, albedoMap = createMaterial(instance.Texture)
-		local emissionMap = nil
-		local instanceFlags = bit32.bor(
-			const.R3D_INSTANCE_POSITION,
-			const.R3D_INSTANCE_ROTATION,
-			const.R3D_INSTANCE_SCALE,
-			const.R3D_INSTANCE_COLOR
-		)
-		local instanceBuffer = adapter.lib.R3D_LoadInstanceBuffer(instance.MaxParticles, instanceFlags)
-		local SHADOW_AUTO = 0
-		local SHADOW_DISABLED = 8
 		local flipbookTime = 0
 		local flipbookFrame = 0
 		local flipbookDir = 1
-
 		local particles = {}
 		local activeCount = 0
 		local emitAccumulator = 0
-
-		local function rebuildInstanceBuffer()
-			if instanceBuffer then
-				pcall(adapter.lib.R3D_UnloadInstanceBuffer, instanceBuffer)
-			end
-			instanceBuffer = adapter.lib.R3D_LoadInstanceBuffer(instance.MaxParticles, instanceFlags)
-		end
-
 		local updateFlipbook
+		local itemBuffer = buffer.create(math.max(1, instance.MaxParticles) * PARTICLE_ITEM_SIZE)
+		local particleTexture = nil
 
-		local function applyMaterialSettings()
-			if not particleMaterial then
-				return
+		local function loadTexture()
+			if particleTexture then
+				argon:Destroy3DTexture(renderer.Window, particleTexture)
+				particleTexture = nil
 			end
-
-			buffer.writei32(
-				particleMaterial,
-				r3dstructs.R3D_Material:offset("transparencyMode"),
-				resolveTransparencyMode(instance.TransparencyMode)
-			)
-			buffer.writei32(
-				particleMaterial,
-				r3dstructs.R3D_Material:offset("blendMode"),
-				resolveBlendMode(instance.BlendMode)
-			)
-			buffer.writei32(
-				particleMaterial,
-				r3dstructs.R3D_Material:offset("billboardMode"),
-				resolveBillboardMode(instance.BillboardMode)
-			)
-			buffer.writei32(
-				particleMaterial,
-				r3dstructs.R3D_Material:offset("cullMode"),
-				resolveCullMode(instance.CullMode)
-			)
-
-			local uvScale = getVector2(instance.UVScale, Vector2.new(1, 1))
-			local uvOffset = getVector2(instance.UVOffset, Vector2.new(0, 0))
-			buffer.writef32(particleMaterial, r3dstructs.R3D_Material:offset("uvScale"), uvScale.X)
-			buffer.writef32(particleMaterial, r3dstructs.R3D_Material:offset("uvScale") + 4, uvScale.Y)
-			buffer.writef32(particleMaterial, r3dstructs.R3D_Material:offset("uvOffset"), uvOffset.X)
-			buffer.writef32(particleMaterial, r3dstructs.R3D_Material:offset("uvOffset") + 4, uvOffset.Y)
-
-			local emissionColor = getColor3(instance.EmissionColor, Color3.new(1, 1, 1))
-			local emissionEnergy = instance.EmissionEnergy or 0
-			if emissionMap then
-				buffer.copy(
-					emissionMap,
-					r3dstructs.R3D_EmissionMap:offset("color"),
-					emissionColor:ToRaylib(0),
-					0,
-					structs.Color:size()
-				)
-				buffer.writef32(emissionMap, r3dstructs.R3D_EmissionMap:offset("energy"), emissionEnergy)
-				buffer.copy(
-					particleMaterial,
-					r3dstructs.R3D_Material:offset("emission"),
-					emissionMap,
-					0,
-					r3dstructs.R3D_EmissionMap:size()
-				)
-			else
-				local emissionMapLocal = r3dstructs.R3D_EmissionMap:new({
-					color = emissionColor:ToRaylib(0),
-					energy = emissionEnergy,
-				})
-				buffer.copy(
-					particleMaterial,
-					r3dstructs.R3D_Material:offset("emission"),
-					emissionMapLocal,
-					0,
-					r3dstructs.R3D_EmissionMap:size()
-				)
+			if type(instance.Texture) == "string" and instance.Texture ~= "" then
+				particleTexture = argon:CreateParticleTexture(renderer.Window, instance.Texture)
 			end
 		end
 
-		local function updateMaterial()
-			if albedoMap then
-				pcall(adapter.lib.R3D_UnloadAlbedoMap, albedoMap)
-				albedoMap = nil
-			end
-			if emissionMap then
-				pcall(adapter.lib.R3D_UnloadEmissionMap, emissionMap)
-				emissionMap = nil
-			end
-			local material, map = createMaterial(instance.Texture)
-			particleMaterial = material
-			albedoMap = map
-
-			if type(instance.EmissionTexture) == "string" and instance.EmissionTexture ~= "" then
-				local emissionTexture = zembed.AssetPath(instance.EmissionTexture)
-				local ok, data = pcall(zune.fs.readFileSync, emissionTexture, true)
-				if ok and data then
-					local ext = lib.GetFileExtension(emissionTexture)
-					local okLoad, map2 = pcall(
-						adapter.lib.R3D_LoadEmissionMapFromMemory,
-						ext,
-						data,
-						buffer.len(data),
-						adapter.const.WHITE,
-						1
-					)
-					if okLoad then
-						emissionMap = map2
-						buffer.copy(
-							particleMaterial,
-							r3dstructs.R3D_Material:offset("emission"),
-							emissionMap,
-							0,
-							r3dstructs.R3D_EmissionMap:size()
-						)
-					end
-				end
-			end
-
-			applyMaterialSettings()
-			if updateFlipbook then
-				updateFlipbook(0)
-			end
+		local function resizeItemBuffer()
+			itemBuffer = buffer.create(math.max(1, instance.MaxParticles) * PARTICLE_ITEM_SIZE)
 		end
 
-		local function applyShadowMode()
-			if particleMesh then
-				local mode = instance.CastShadow and SHADOW_AUTO or SHADOW_DISABLED
-				buffer.writei32(particleMesh, r3dstructs.R3D_Mesh:offset("shadowCastMode"), mode)
-			end
+		local function getCameraCFrame()
+			local workspace = game and game:GetService("Workspace")
+			local camera = workspace and (workspace.Camera or workspace.CurrentCamera)
+			return camera and camera.CFrame
 		end
 
-		applyShadowMode()
-		applyMaterialSettings()
+		loadTexture()
 
 		local function emitParticle()
 			if activeCount >= instance.MaxParticles then
@@ -538,7 +293,7 @@ return {
 			end
 
 			local rawBodyID = nil
-			if game then
+			if game and not instance.LockedToPart and instance.CollideParticles then
 				local ups = game:GetService("UnifiedPhysicsService")
 				if ups and ups.CreateRawBody then
 					rawBodyID = ups.CreateRawBody({
@@ -564,6 +319,8 @@ return {
 				rotation = math.rad(randomRange(instance.Rotation, 0, 0)),
 				rotSpeed = math.rad(randomRange(instance.RotSpeed, 0, 0)),
 				axis = dir,
+				localOffset = instance.LockedToPart and emitterCF:Inverse() * emitterCF.Position or nil,
+				localVelocity = instance.LockedToPart and emitterCF:VectorToObjectSpace(baseVel) or nil,
 				-- Fallback physics if UPS is unavailable
 				position = not rawBodyID and emitterCF.Position or nil,
 				velocity = not rawBodyID and baseVel or nil,
@@ -608,6 +365,7 @@ return {
 			end
 
 			local ups = game and game:GetService("UnifiedPhysicsService")
+			local emitterCF = instance.LockedToPart and getEmitterCFrame(instance) or nil
 
 			local i = 1
 			while i <= activeCount do
@@ -658,7 +416,16 @@ return {
 						end
 
 						p.velocity = velocity
-						p.position = position + velocity * scaledDt
+						if instance.LockedToPart and p.localOffset then
+							p.localVelocity = (p.localVelocity or Vector3.zero)
+								+ emitterCF:VectorToObjectSpace(accel) * scaledDt
+							if drag > 0 then
+								p.localVelocity = p.localVelocity * (1 - drag * scaledDt)
+							end
+							p.localOffset = p.localOffset + p.localVelocity * scaledDt
+						else
+							p.position = position + velocity * scaledDt
+						end
 					end
 
 					p.rotation += p.rotSpeed * scaledDt
@@ -667,128 +434,69 @@ return {
 			end
 		end
 
-		local function updateInstanceBuffer()
-			if activeCount <= 0 or not instanceBuffer then
-				return
-			end
+		local function writeMatrix(base, pos, right, up, look, size)
+			buffer.writef32(itemBuffer, base, right.X * size)
+			buffer.writef32(itemBuffer, base + 4, up.X * size)
+			buffer.writef32(itemBuffer, base + 8, look.X * size)
+			buffer.writef32(itemBuffer, base + 12, pos.X)
+			buffer.writef32(itemBuffer, base + 16, right.Y * size)
+			buffer.writef32(itemBuffer, base + 20, up.Y * size)
+			buffer.writef32(itemBuffer, base + 24, look.Y * size)
+			buffer.writef32(itemBuffer, base + 28, pos.Y)
+			buffer.writef32(itemBuffer, base + 32, right.Z * size)
+			buffer.writef32(itemBuffer, base + 36, up.Z * size)
+			buffer.writef32(itemBuffer, base + 40, look.Z * size)
+			buffer.writef32(itemBuffer, base + 44, pos.Z)
+			buffer.writef32(itemBuffer, base + 48, 0)
+			buffer.writef32(itemBuffer, base + 52, 0)
+			buffer.writef32(itemBuffer, base + 56, 0)
+			buffer.writef32(itemBuffer, base + 60, 1)
+		end
 
-			local mappedPosition = nil
-			local mappedRotation = nil
-			local mappedScale = nil
-			local mappedColor = nil
+		local function buildParticleItems()
+			if activeCount <= 0 then
+				return 0
+			end
 
 			local ups = game and game:GetService("UnifiedPhysicsService")
+			local cameraCF = getCameraCFrame()
+			local right = cameraCF and cameraCF:GetRightVector() or Vector3.new(1, 0, 0)
+			local up = cameraCF and cameraCF:GetUpVector() or Vector3.new(0, 1, 0)
+			local look = cameraCF and -cameraCF:GetLookVector() or Vector3.new(0, 0, 1)
+			local emitterCF = instance.LockedToPart and getEmitterCFrame(instance) or nil
 
-			local okMap = pcall(function()
-				mappedPosition = adapter.lib.R3D_MapInstances(instanceBuffer, const.R3D_INSTANCE_POSITION)
-				mappedRotation = adapter.lib.R3D_MapInstances(instanceBuffer, const.R3D_INSTANCE_ROTATION)
-				mappedScale = adapter.lib.R3D_MapInstances(instanceBuffer, const.R3D_INSTANCE_SCALE)
-				mappedColor = adapter.lib.R3D_MapInstances(instanceBuffer, const.R3D_INSTANCE_COLOR)
-			end)
+			for idx = 1, activeCount do
+				local p = particles[idx]
+				local age = 1 - (p.life / p.lifetime)
+				local t = clamp01(age)
+				local size = evalNumberSequence(instance.Size, t, 1)
+				local color = evalColorSequence(instance.Color, t, Color3.new(1, 1, 1))
+				local transparency = evalNumberSequence(instance.Transparency, t, 0)
+				local cr, cg, cb = color:ToRGB()
+				local alpha = math.floor(255 * (1 - clamp01(transparency)) + 0.5)
 
-			local mappedFlags = bit32.bor(
-				mappedPosition and const.R3D_INSTANCE_POSITION or 0,
-				mappedRotation and const.R3D_INSTANCE_ROTATION or 0,
-				mappedScale and const.R3D_INSTANCE_SCALE or 0,
-				mappedColor and const.R3D_INSTANCE_COLOR or 0
-			)
-
-			-- description: "Writes instances."
-			-- args: "writePosition: any, writeRotation: number, writeScale: number, writeColor: number"
-			local function writeInstances(writePosition, writeRotation, writeScale, writeColor)
-				for idx = 1, activeCount do
-					local p = particles[idx]
-					local age = 1 - (p.life / p.lifetime)
-					local t = clamp01(age)
-
-					local size = evalNumberSequence(instance.Size, t, 1)
-					local color = evalColorSequence(instance.Color, t, Color3.new(1, 1, 1))
-					local transparency = evalNumberSequence(instance.Transparency, t, 0)
-
-					local r, g, b = color:ToRGB()
-					local alpha = math.floor(255 * (1 - clamp01(transparency)))
-
-					if writePosition then
-						local pOffset = (idx - 1) * 12
-						local pos = Vector3.zero
-						if p.bodyID then
-							if ups and ups.GetRawBodyPosition then
-								pos = ups.GetRawBodyPosition(p.bodyID)
-							end
-						else
-							pos = p.position or Vector3.zero
-						end
-						writePosition(pOffset, pos)
-					end
-
-					if writeRotation then
-						local rotCF = CFrame.fromAxisAngle(p.axis, p.rotation)
-						local qx, qy, qz, qw = rotCF:ToQuaternion()
-						local rOffset = (idx - 1) * 16
-						writeRotation(rOffset, qx, qy, qz, qw)
-					end
-
-					if writeScale then
-						local sOffset = (idx - 1) * 12
-						writeScale(sOffset, size)
-					end
-
-					if writeColor then
-						local cOffset = (idx - 1) * 4
-						writeColor(cOffset, r, g, b, alpha)
-					end
+				local pos = Vector3.zero
+				if p.bodyID and ups and ups.GetRawBodyPosition then
+					pos = ups.GetRawBodyPosition(p.bodyID)
+				elseif emitterCF and p.localOffset then
+					pos = emitterCF * p.localOffset
+				else
+					pos = p.position or Vector3.zero
 				end
+
+				local rotSin = math.sin(p.rotation)
+				local rotCos = math.cos(p.rotation)
+				local drawRight = right * rotCos + up * rotSin
+				local drawUp = up * rotCos - right * rotSin
+				local base = (idx - 1) * PARTICLE_ITEM_SIZE
+				writeMatrix(base, pos, drawRight, drawUp, look, size)
+				buffer.writeu8(itemBuffer, base + 64, cr)
+				buffer.writeu8(itemBuffer, base + 65, cg)
+				buffer.writeu8(itemBuffer, base + 66, cb)
+				buffer.writeu8(itemBuffer, base + 67, alpha)
 			end
 
-			if okMap and mappedFlags == instanceFlags then
-				local okWrite = pcall(function()
-					writeInstances(
-						writePositionMapped(mappedPosition),
-						writeRotationMapped(mappedRotation),
-						writeScaleMapped(mappedScale),
-						writeColorMapped(mappedColor)
-					)
-				end)
-				if okWrite then
-					pcall(adapter.lib.R3D_UnmapInstances, instanceBuffer, instanceFlags)
-					return
-				end
-			end
-
-			if mappedFlags ~= 0 then
-				pcall(adapter.lib.R3D_UnmapInstances, instanceBuffer, mappedFlags)
-			end
-
-			local positionBuffer = buffer.create(activeCount * 12)
-			local rotationBuffer = buffer.create(activeCount * 16)
-			local scaleBuffer = buffer.create(activeCount * 12)
-			local colorBuffer = buffer.create(activeCount * 4)
-
-			writeInstances(
-				writePositionBuffer(positionBuffer),
-				writeRotationBuffer(rotationBuffer),
-				writeScaleBuffer(scaleBuffer),
-				writeColorBuffer(colorBuffer)
-			)
-
-			pcall(function()
-				adapter.lib.R3D_UploadInstances(
-					instanceBuffer,
-					const.R3D_INSTANCE_POSITION,
-					0,
-					activeCount,
-					positionBuffer
-				)
-				adapter.lib.R3D_UploadInstances(
-					instanceBuffer,
-					const.R3D_INSTANCE_ROTATION,
-					0,
-					activeCount,
-					rotationBuffer
-				)
-				adapter.lib.R3D_UploadInstances(instanceBuffer, const.R3D_INSTANCE_SCALE, 0, activeCount, scaleBuffer)
-				adapter.lib.R3D_UploadInstances(instanceBuffer, const.R3D_INSTANCE_COLOR, 0, activeCount, colorBuffer)
-			end)
+			return activeCount
 		end
 
 		-- description: "Updates flipbook."
@@ -835,17 +543,27 @@ return {
 			local finalOffsetX = baseOffset.X + (col * frameScaleX * baseScale.X)
 			local finalOffsetY = baseOffset.Y + (row * frameScaleY * baseScale.Y)
 
-			buffer.writef32(particleMaterial, r3dstructs.R3D_Material:offset("uvScale"), finalScaleX)
-			buffer.writef32(particleMaterial, r3dstructs.R3D_Material:offset("uvScale") + 4, finalScaleY)
-			buffer.writef32(particleMaterial, r3dstructs.R3D_Material:offset("uvOffset"), finalOffsetX)
-			buffer.writef32(particleMaterial, r3dstructs.R3D_Material:offset("uvOffset") + 4, finalOffsetY)
+			instance._particleUVScale = Vector2.new(finalScaleX, finalScaleY)
+			instance._particleUVOffset = Vector2.new(finalOffsetX, finalOffsetY)
 		end
 
 		local renderId = renderer.Pool.new("3d", function()
 			if activeCount <= 0 then
 				return
 			end
-			renderer.MeshPool.DrawMeshInstanced(particleMesh, particleMaterial, instanceBuffer, activeCount)
+			local count = buildParticleItems()
+			if count > 0 then
+				argon:DrawParticles(
+					renderer.Window,
+					particleTexture,
+					itemBuffer,
+					count,
+					instance._particleUVScale or getVector2(instance.UVScale, Vector2.new(1, 1)),
+					instance._particleUVOffset or getVector2(instance.UVOffset, Vector2.new(0, 0)),
+					instance.CastShadow ~= false,
+					resolveCullMode(instance.CullMode) ~= 0
+				)
+			end
 		end)
 
 		if instance.FlipbookStartRandom then
@@ -859,21 +577,13 @@ return {
 
 		renderer.Hook.new("Renderstep", function(dt)
 			updateParticles(dt)
-			updateInstanceBuffer()
 			updateFlipbook(dt)
 		end)
 
 		instance.Changed:Connect(function(property)
 			if property == "Texture" then
-				updateMaterial()
-			elseif property == "EmissionTexture" then
-				updateMaterial()
-			elseif property == "EmissionColor" or property == "EmissionEnergy" then
-				applyMaterialSettings()
-			elseif property == "TransparencyMode" or property == "BlendMode" or property == "CullMode" then
-				applyMaterialSettings()
-			elseif property == "BillboardMode" or property == "UVScale" or property == "UVOffset" then
-				applyMaterialSettings()
+				loadTexture()
+			elseif property == "UVScale" or property == "UVOffset" then
 				updateFlipbook(0)
 			elseif
 				property == "FlipbookColumns"
@@ -883,9 +593,7 @@ return {
 			then
 				updateFlipbook(0)
 			elseif property == "MaxParticles" then
-				rebuildInstanceBuffer()
-			elseif property == "CastShadow" then
-				applyShadowMode()
+				resizeItemBuffer()
 			end
 		end)
 
@@ -893,14 +601,9 @@ return {
 			if renderId then
 				renderer.Pool.Destroy(renderId)
 			end
-			if instanceBuffer then
-				pcall(adapter.lib.R3D_UnloadInstanceBuffer, instanceBuffer)
-			end
-			if particleMesh then
-				pcall(adapter.lib.R3D_UnloadMesh, particleMesh)
-			end
-			if albedoMap then
-				pcall(adapter.lib.R3D_UnloadAlbedoMap, albedoMap)
+			if particleTexture then
+				argon:Destroy3DTexture(renderer.Window, particleTexture)
+				particleTexture = nil
 			end
 			local ups = game and game:GetService("UnifiedPhysicsService")
 			for i = 1, activeCount do

@@ -163,6 +163,13 @@ function SDLAdapter:ClipRoundRect(window: typedefs.Window, rect: typedefs.Rectan
 	ui:ClipRoundRect(window._uihandle, rect, radiusX, radiusY)
 end
 
+function SDLAdapter:ClipSquircle(window: typedefs.Window, rect: typedefs.Rectangle, radius: number, exponent: number)
+	if not window_real(window) then
+		return
+	end
+	ui:ClipSquircle(window._uihandle, rect, radius, exponent)
+end
+
 function SDLAdapter:InitWindow(params: typedefs.WindowParams): typedefs.Window
 	local graphics = {
 		opengl = 0x0000000000000002,
@@ -399,6 +406,17 @@ function SDLAdapter:CreateCustomMesh(window: typedefs.Window, vertexData, vertex
 	return filament:CreateCustomMesh(window, vertexData, vertexCount, indices, indexCount)
 end
 
+function SDLAdapter:CreateTerrainMesh(
+	window: typedefs.Window,
+	vertexData,
+	materialWeights,
+	vertexCount,
+	indices,
+	indexCount
+)
+	return filament:CreateTerrainMesh(window, vertexData, materialWeights, vertexCount, indices, indexCount)
+end
+
 function SDLAdapter:DestroyMesh(window: typedefs.Window, mesh: typedefs.Mesh?)
 	return filament:DestroyMesh(window, mesh)
 end
@@ -415,6 +433,23 @@ function SDLAdapter:DestroyGizmo(window: typedefs.Window, gizmo: typedefs.Gizmo?
 	return filament:DestroyGizmo(window, gizmo)
 end
 
+function SDLAdapter:PickGizmo(window: typedefs.Window, gizmo: typedefs.Gizmo, mat4, screenX: number, screenY: number)
+	return filament:PickGizmo(window, gizmo, mat4, screenX, screenY)
+end
+
+function SDLAdapter:GetGizmoDragDelta(
+	window: typedefs.Window,
+	gizmo: typedefs.Gizmo,
+	mat4,
+	axis: number,
+	startX: number,
+	startY: number,
+	currentX: number,
+	currentY: number
+)
+	return filament:GetGizmoDragDelta(window, gizmo, mat4, axis, startX, startY, currentX, currentY)
+end
+
 function SDLAdapter:CreateDecalTexture(window: typedefs.Window, path: string)
 	path = zembed.AssetPath(path)
 	local image, surface = loadRgbaImage(path)
@@ -425,6 +460,38 @@ function SDLAdapter:CreateDecalTexture(window: typedefs.Window, path: string)
 	local texture = filament:CreateTextureFromImage(window, image)
 	sdl.lib.SDL_DestroySurface(surface)
 	return texture
+end
+
+function SDLAdapter:CreateSurface3DTexture(window: typedefs.Window, surface: typedefs.Surface2D)
+	if not surface or not surface._uihandle then
+		return nil
+	end
+	local pixels, pitch = ui:GetPixelsAndPitch(surface._uihandle)
+	if not pixels or not pitch then
+		return nil
+	end
+	return filament:CreateTextureFromImage(window, {
+		width = surface.width,
+		height = surface.height,
+		pitch = pitch,
+		pixels = pixels,
+	})
+end
+
+function SDLAdapter:UpdateSurface3DTexture(window: typedefs.Window, texture, surface: typedefs.Surface2D)
+	if not texture or not surface or not surface._uihandle then
+		return false
+	end
+	local pixels, pitch = ui:GetPixelsAndPitch(surface._uihandle)
+	if not pixels or not pitch then
+		return false
+	end
+	return filament:UpdateTextureFromImage(window, texture, {
+		width = surface.width,
+		height = surface.height,
+		pitch = pitch,
+		pixels = pixels,
+	})
 end
 
 function SDLAdapter:CreateMeshTexture(window: typedefs.Window, path: string)
@@ -455,6 +522,69 @@ function SDLAdapter:CreateMeshTexture(window: typedefs.Window, path: string)
 	return texture
 end
 
+function SDLAdapter:CreatePbrMeshTexture(
+	window: typedefs.Window,
+	albedoPath: string,
+	normalPath: string?,
+	ormPath: string?,
+	heightPath: string?,
+	heightScale: number?
+)
+	local albedo, albedoSurface = loadRgbaImage(albedoPath)
+	if not albedo then
+		return nil
+	end
+
+	local normal, normalSurface = if normalPath then loadRgbaImage(normalPath) else nil, nil
+	local orm, ormSurface = if ormPath then loadRgbaImage(ormPath) else nil, nil
+	local heightImg, heightSurface = if heightPath then loadRgbaImage(heightPath) else nil, nil
+
+	local texture = filament:CreateMaterialTextureFromImages(
+		window,
+		albedo,
+		normal,
+		orm,
+		heightImg,
+		heightScale or 0.0
+	)
+
+	sdl.lib.SDL_DestroySurface(albedoSurface)
+	if normalSurface then sdl.lib.SDL_DestroySurface(normalSurface) end
+	if ormSurface then sdl.lib.SDL_DestroySurface(ormSurface) end
+	if heightSurface then sdl.lib.SDL_DestroySurface(heightSurface) end
+
+	return texture
+end
+
+function SDLAdapter:CreateTerrainTextureSet(window: typedefs.Window, layers)
+	return filament:CreateTerrainTextureSet(window, layers)
+end
+
+function SDLAdapter:CreateParticleTexture(window: typedefs.Window, path: string)
+	path = zembed.AssetPath(path)
+	local image, surface = loadRgbaImage(path)
+	if not image then
+		return nil
+	end
+
+	local texture = filament:CreateParticleTexture(window, image)
+	sdl.lib.SDL_DestroySurface(surface)
+	return texture
+end
+
+function SDLAdapter:DrawParticles(
+	window: typedefs.Window,
+	texture,
+	items,
+	itemCount: number,
+	uvScale: typedefs.Vector2?,
+	uvOffset: typedefs.Vector2?,
+	castShadows: boolean?,
+	culling: boolean?
+)
+	return filament:DrawParticles(window, texture, items, itemCount, uvScale, uvOffset, castShadows, culling)
+end
+
 function SDLAdapter:MeasureText(window: typedefs.Window, text: string, textSize: number, font: typedefs.Font)
 	return ui:MeasureText(text, textSize, font)
 end
@@ -463,11 +593,30 @@ function SDLAdapter:GetFontLineHeight(fontSize: number, font: typedefs.Font)
 	return ui:GetFontLineHeight(fontSize, font)
 end
 
-function SDLAdapter:DrawImageSized(window: typedefs.Window, image: typedefs.Image, rect: typedefs.Rectangle)
+function SDLAdapter:DrawImageSized(
+	window: typedefs.Window,
+	image: typedefs.Image,
+	rect: typedefs.Rectangle,
+	alpha: number?
+)
 	if not window_real(window) then
 		return
 	end
-	ui:DrawImageSized(window._uihandle, image, rect)
+	ui:DrawImageSized(window._uihandle, image, rect, alpha)
+end
+
+function SDLAdapter:DrawImageOutlineSized(
+	window: typedefs.Window,
+	image: typedefs.Image,
+	rect: typedefs.Rectangle,
+	color: typedefs.Color,
+	thickness: number,
+	alpha: number?
+)
+	if not window_real(window) then
+		return
+	end
+	ui:DrawImageOutlineSized(window._uihandle, image, rect, color, thickness, alpha)
 end
 
 function SDLAdapter:ShowWindow(window: typedefs.Window)
@@ -480,6 +629,7 @@ end
 function SDLAdapter:BeginFrame(context: typedefs.RenderingContext)
 	if context.Window.WGI == "vulkan" then
 		context.Window._vulkanCompositorFrameActive = false
+		context.Window._vulkanCompositorOverlaySurface = nil
 		local filamentCompositor = filament:GetVulkanCompositor(context.Window)
 		if filamentCompositor then
 			context.Window._vulkanCompositor = filamentCompositor
@@ -512,6 +662,35 @@ function SDLAdapter:BeginFrame(context: typedefs.RenderingContext)
 	sdl.lib.SDL_GL_MakeCurrent(context.Window._handle, context._handle)
 end
 
+function SDLAdapter:BeginOverlay(context: typedefs.RenderingContext): boolean
+	local window = context.Window
+	if window.WGI ~= "vulkan" then
+		return true
+	end
+	if not window._vulkanCompositor or not window._vulkanCompositorFrameActive then
+		return false
+	end
+
+	local surface = vulkan_compositor.lib.Kine_VulkanCompositor_BeginOverlay(window._vulkanCompositor)
+	if surface and surface ~= zune.ffi.null then
+		window._vulkanCompositorOverlaySurface = surface
+		window._uihandle = surface
+		window._vulkanOverlayErrorLogged = nil
+		return true
+	end
+
+	if not window._vulkanOverlayErrorLogged then
+		local errorPtr = vulkan_compositor.lib.Kine_VulkanCompositor_GetLastError(window._vulkanCompositor)
+		if errorPtr and errorPtr ~= zune.ffi.null then
+			print("Vulkan compositor BeginOverlay failed: " .. readCString(errorPtr, 512))
+		else
+			print("Vulkan compositor BeginOverlay failed.")
+		end
+		window._vulkanOverlayErrorLogged = true
+	end
+	return false
+end
+
 function SDLAdapter:ReleaseGLContext(context: typedefs.RenderingContext)
 	if context.Window.WGI == "vulkan" then
 		return
@@ -539,6 +718,7 @@ function SDLAdapter:EndFrame(context: typedefs.RenderingContext)
 		end
 		context.Window._vulkanCompositorFrameActive = false
 		context.Window._vulkanCompositorFrameSurface = nil
+		context.Window._vulkanCompositorOverlaySurface = nil
 		context.Window._uihandle = context.Window._rasterUIHandle
 		return
 	end
@@ -716,6 +896,22 @@ function SDLAdapter:EnableCursor(window: typedefs.Window)
 	sdl.lib.SDL_SetWindowRelativeMouseMode(window._handle, false)
 end
 
+function SDLAdapter:ShowCursor()
+	sdl.lib.SDL_ShowCursor()
+end
+
+function SDLAdapter:HideCursor()
+	sdl.lib.SDL_HideCursor()
+end
+
+function SDLAdapter:IsWindowFocused(window: typedefs.Window): boolean
+	if not window_real(window) then
+		return false
+	end
+	local flags = sdl.lib.SDL_GetWindowFlags(window._handle)
+	return bit32.band(flags, 0x00000200) ~= 0
+end
+
 function SDLAdapter:SetMousePosition(window: typedefs.Window, x: number, y: number)
 	if not window_real(window) then
 		return
@@ -732,12 +928,14 @@ function SDLAdapter:GetMouseDelta()
 end
 
 function SDLAdapter:GetMouseWheelMove()
-	local value = mouseWheel
-	mouseWheel = 0
-	return value
+	return mouseWheel
 end
 
 function SDLAdapter:IsKeyDown(key: number)
+	local keyboardState = sdl.lib.SDL_GetKeyboardState(zune.ffi.null)
+	if keyboardState then
+		return keyboardState:readu8(key) ~= 0
+	end
 	return keyDown[key] == true
 end
 
@@ -916,6 +1114,75 @@ function SDLAdapter:DrawRectangle(window: typedefs.Window, rectangle: typedefs.R
 		return
 	end
 	ui:DrawRect(window._uihandle, rectangle)
+end
+
+function SDLAdapter:DrawRoundRectangle(
+	window: typedefs.Window,
+	rectangle: typedefs.Rectangle,
+	radiusX: number,
+	radiusY: number,
+	strokeWidth: number?
+)
+	if not window_real(window) then
+		return
+	end
+	ui:DrawRoundRect(window._uihandle, rectangle, radiusX, radiusY, strokeWidth)
+end
+
+function SDLAdapter:DrawSquircle(
+	window: typedefs.Window,
+	rectangle: typedefs.Rectangle,
+	radius: number,
+	exponent: number,
+	strokeWidth: number?
+)
+	if not window_real(window) then
+		return
+	end
+	ui:DrawSquircle(window._uihandle, rectangle, radius, exponent, strokeWidth)
+end
+
+function SDLAdapter:DrawUIShadow(
+	window: typedefs.Window,
+	rectangle: typedefs.Rectangle,
+	radius: number,
+	exponent: number,
+	offset,
+	blur: number,
+	spread: number
+)
+	if not window_real(window) then
+		return
+	end
+	ui:DrawUIShadow(window._uihandle, rectangle, radius, exponent, offset, blur, spread)
+end
+
+function SDLAdapter:DrawBackdropBlur(
+	window: typedefs.Window,
+	rectangle: typedefs.Rectangle,
+	blur: number,
+	radiusX: number?,
+	radiusY: number?,
+	tint: typedefs.Color?
+)
+	if not window_real(window) then
+		return
+	end
+	ui:DrawBackdropBlur(window._uihandle, rectangle, blur, radiusX, radiusY, tint)
+end
+
+function SDLAdapter:DrawBackdropBlurSquircle(
+	window: typedefs.Window,
+	rectangle: typedefs.Rectangle,
+	blur: number,
+	radius: number,
+	exponent: number,
+	tint: typedefs.Color?
+)
+	if not window_real(window) then
+		return
+	end
+	ui:DrawBackdropBlurSquircle(window._uihandle, rectangle, blur, radius, exponent, tint)
 end
 
 function SDLAdapter:CreateSkiaSurface(width, height): typedefs.Surface2D
@@ -1131,7 +1398,7 @@ function SDLAdapter:SetClipboard(text: string)
 end
 
 function SDLAdapter:GetClipboard()
-	return sdl.lib.SDL_GetClipboardText()
+	return readCString(sdl.lib.SDL_GetClipboardText())
 end
 
 -- frame
@@ -1146,8 +1413,27 @@ end
 -- i genuinely dont want to write this but
 SDLAdapter.DrawMesh = filament.DrawMesh
 SDLAdapter.DrawMeshList = filament.DrawMeshList
+SDLAdapter.CreateInstanceBatch = filament.CreateInstanceBatch
+SDLAdapter.UpdateInstanceTransforms = filament.UpdateInstanceTransforms
+SDLAdapter.DestroyInstanceBatch = filament.DestroyInstanceBatch
 SDLAdapter.DrawMeshOutline = filament.DrawMeshOutline
 SDLAdapter.DrawGizmo = filament.DrawGizmo
+SDLAdapter.SetPostProcessing = filament.SetPostProcessing
+SDLAdapter.SetBloom = filament.SetBloom
+SDLAdapter.SetAmbientOcclusion = filament.SetAmbientOcclusion
+SDLAdapter.SetAntiAliasing = filament.SetAntiAliasing
+SDLAdapter.SetDynamicResolution = filament.SetDynamicResolution
+SDLAdapter.SetDepthOfField = filament.SetDepthOfField
+SDLAdapter.SetVignette = filament.SetVignette
+SDLAdapter.SetScreenSpaceReflections = filament.SetScreenSpaceReflections
+SDLAdapter.SetColorGrading = filament.SetColorGrading
+SDLAdapter.SetRenderQuality = filament.SetRenderQuality
+SDLAdapter.SetDithering = filament.SetDithering
+SDLAdapter.SetShadowOptions = filament.SetShadowOptions
+SDLAdapter.SetSunShadowOptions = filament.SetSunShadowOptions
+SDLAdapter.SetSunRays = filament.SetSunRays
+SDLAdapter.ConfigurePostProcessing = filament.ConfigurePostProcessing
+SDLAdapter.SetPostProcessingPreset = filament.SetPostProcessingPreset
 SDLAdapter.SetSkyAtmosphere = filament.SetSkyAtmosphere
 SDLAdapter.SetCameraLookAt = filament.SetCameraLookAt
 SDLAdapter.CreateDecal = filament.CreateDecal

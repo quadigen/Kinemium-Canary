@@ -108,7 +108,7 @@
         "Kinemium.window": "./src/environment/libraries/window",
         "Kinemium.gameservices": "./src/environment/game/services",
         "gns": "./src/libs/GNS",
-        "gns_ffi": "./src/external/gns",
+        "enet_ffi": "./src/external/enet",
         "kinec": "./src/modules/kinec",
         "jolt": "./src/external/jolt/wrapper",
         "Kinemium.joltdll": "./src/external/jolt/joltc.dll",

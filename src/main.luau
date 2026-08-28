@@ -2,6 +2,40 @@
 --!native
 
 local zembed = require("@zembed")
+
+local function normalizeEmbeddedPath(path)
+	return (path:gsub([=[\]=], "/")):gsub("^%./", "")
+end
+
+local function hasEmbeddedScript(path)
+	if not zembed.IsEmbedded() then
+		return false
+	end
+
+	local target = normalizeEmbeddedPath(path)
+	local targetName = target:match("([^/]+)$")
+	for _, embeddedPath in ipairs(zune.fs.embeddedScripts()) do
+		local normalized = normalizeEmbeddedPath(embeddedPath)
+		local embeddedName = normalized:match("([^/]+)$")
+		if normalized == target or embeddedName == targetName then
+			return true
+		end
+	end
+
+	return false
+end
+
+local embeddedGameData
+if hasEmbeddedScript(".temp/embedded-game-data.luau") then
+	local success, data = pcall(require, "../.temp/embedded-game-data")
+	if success then
+		embeddedGameData = data
+		print("Found embedded game data.")
+	else
+		print("Failed to load embedded game data: " .. tostring(data))
+	end
+end
+
 if zembed.IsEmbedded() then
 	_G.IsExecutable = true
 	print("Running embedded mode.")
@@ -112,7 +146,6 @@ _G.ENGINE_VERSION = "1.10.7"
 _G.ENGINE_ENDPOINT = {
 	MARKETPLACE = "https://quadigen.github.io/Kinemium-Engine-Plugins/plugins.json",
 	API = "https://kinemium-docs.vercel.app/api/docs/",
-	USERAPI = "https://msi.tail721598.ts.net",
 	WEB = "https://kinemium-platform.vercel.app",
 }
 
@@ -385,6 +418,8 @@ local function readBundledScript(path)
 	end
 	return zune.fs.readFile(path)
 end
+
+kilang.env.EmbeddedGameData = embeddedGameData
 
 local function loop(base, callback)
 	base = base or "src/sandboxed"

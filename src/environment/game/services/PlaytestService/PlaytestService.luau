@@ -67,8 +67,6 @@ PlaytestService.InitRenderer = function(renderer, renderer_signal, datamodel)
 
 			local Process = datamodel:GetService("Process")
 
-			local serverReady = false
-
 			task.spawn(function()
 				server_process = Process.CreateKinemiumServerProcess({
 					"--headless",

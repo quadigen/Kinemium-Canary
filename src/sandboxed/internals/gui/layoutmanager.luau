@@ -13,6 +13,7 @@ local LayoutConfig = {
 	Right = { flexGrow = 0.22, minWidth = 0 },
 
 	Viewport = { flexGrow = 0.7, layoutOrder = 1 },
+	CodeEditor = { target = "Viewport" },
 	Output = { flexGrow = 0.3, layoutOrder = 2 },
 
 	Explorer = { flexGrow = 0.5, layoutOrder = 1 },
@@ -112,6 +113,7 @@ local function computeLayout(width, height)
 	return {
 		TopbarCoordinates = toCoordinates(topbarItem, 0, 0),
 		ViewportCoordinates = toCoordinates(viewportItem, leftOffsetX, leftOffsetY),
+		CodeEditorCoordinates = toCoordinates(viewportItem, leftOffsetX, leftOffsetY),
 		OutputCoordinates = toCoordinates(outputItem, leftOffsetX, leftOffsetY),
 		ExplorerCoordinates = toCoordinates(explorerItem, rightOffsetX, rightOffsetY),
 		InspectorCoordinates = toCoordinates(inspectorItem, rightOffsetX, rightOffsetY),

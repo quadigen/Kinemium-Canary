@@ -8,6 +8,8 @@ local propTable = {
 	Threshold = 0.6,
 	SoftThreshold = 0.5,
 	FilterRadius = 1.0,
+	Resolution = 384,
+	LensFlare = false,
 	Enabled = true,
 	Name = "BloomEffect",
 	BaseClass = "LightingPreprocess",
@@ -15,35 +17,33 @@ local propTable = {
 
 return {
 	class = "BloomEffect",
-	callback = function(instance)
-		local r3d = require("@r3d")
+	callback = function(instance, renderer)
+		local Argon = require("@Argon")
 
 		instance:SetProperties(propTable)
 
-		local envBloom = r3d.structs.R3D_EnvBloom:new({
-			mode = instance.Enabled and instance.Mode.Value or 0,
-			levels = instance.Levels,
-			intensity = instance.Intensity,
-			threshold = instance.Threshold,
-			softThreshold = instance.SoftThreshold,
-			filterRadius = instance.FilterRadius,
-		})
-		instance:SetMetadata("EffectObject", envBloom)
-
-		instance.Changed:Connect(function(property, value)
-			if property == "_r3deffect" then
+		local function applyFilament()
+			if not renderer or not renderer.Window then
 				return
 			end
-			envBloom = r3d.structs.R3D_EnvBloom:new({
-				mode = instance.Enabled and instance.Mode.Value or 0,
-				levels = instance.Levels,
-				intensity = instance.Intensity,
-				threshold = instance.Threshold,
-				softThreshold = instance.SoftThreshold,
-				filterRadius = instance.FilterRadius,
+			local active = instance.Enabled and instance.Parent ~= nil and instance.Parent:IsA("Lighting")
+			local levels = if instance.Levels <= 1
+				then math.round(1 + instance.Levels * 10)
+				else math.round(instance.Levels)
+			Argon:SetBloom(renderer.Window, active, {
+				Strength = math.clamp(instance.Intensity, 0, 1),
+				Levels = math.clamp(levels, 1, 11),
+				Resolution = instance.Resolution,
+				Threshold = instance.Threshold > 0,
+				LensFlare = instance.LensFlare,
 			})
-			instance:SetMetadata("EffectObject", envBloom)
+		end
+
+		instance.Changed:Connect(function(property, value)
+			applyFilament()
 		end)
+		instance.AncestryChanged:Connect(applyFilament)
+		applyFilament()
 
 		return instance
 	end,

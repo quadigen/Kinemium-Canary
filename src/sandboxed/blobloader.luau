@@ -5,24 +5,37 @@ local flagValue = GetFlagValue("blob")
 
 local path = "./exported/obj.kine"
 
-if not IsClient and not IsServer then
+local function loadBlob(read, source)
+	if BlobLoader.MarkBlobLoadingPending then
+		BlobLoader:MarkBlobLoadingPending()
+	end
+
+	local loadOk, loadErr = pcall(BlobLoader.LoadFileAsGame, read)
+	if not loadOk then
+		warn("Failed to load blob from " .. source .. ": " .. tostring(loadErr))
+	end
+	game:PrintTree()
+end
+
+local embeddedGame = if not flagValue and IsExecutable then EmbeddedGameData else nil
+
+if embeddedGame then
+	task.spawn(function()
+		print("Loading embedded game")
+		loadBlob(embeddedGame, "executable")
+	end)
+elseif not flagValue and not IsClient and not IsServer then
 	task.spawn(function()
 		print("Checking if path exists")
 		local ok, read = pcall(Filesystem.readFile, path, true)
 		if not ok or not read then
 			return
 		end
-		local loadOk, loadErr = pcall(BlobLoader.LoadFileAsGame, read)
-		if not loadOk then
-			warn("Failed to load blob: " .. tostring(loadErr))
-		end
+		loadBlob(read, path)
 	end)
 end
 
 if flagValue then
-	if BlobLoader.MarkBlobLoadingPending then
-		BlobLoader:MarkBlobLoadingPending()
-	end
 	print("Loading blob from", flagValue)
 
 	task.spawn(function()
@@ -31,10 +44,7 @@ if flagValue then
 			warn("Failed to read blob file: " .. tostring(read or flagValue))
 			return
 		end
-		local loadOk, loadErr = pcall(BlobLoader.LoadFileAsGame, read)
-		if not loadOk then
-			warn("Failed to load blob: " .. tostring(loadErr))
-		end
+		loadBlob(read, flagValue)
 	end)
 end
 

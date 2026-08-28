@@ -3,24 +3,16 @@ local argon = require("@Argon")
 
 local LEFT_MOUSE_BUTTON = 1
 
-local function lerp(a: number, b: number, t: number): number
-	return a + (b - a) * t
-end
-
 local function smoothTowards(current: number, target: number, speed: number, dt: number): number
 	local t = 1 - math.exp(-speed * dt)
-	return lerp(current, target, t)
-end
-
-local function clampColor(v: number): number
-	return math.clamp(v, 0, 1)
+	return current + (target - current) * t
 end
 
 local function brighten(color: typedefs.RGBA, amount: number): typedefs.RGBA
 	return {
-		R = clampColor(color.R + amount),
-		G = clampColor(color.G + amount),
-		B = clampColor(color.B + amount),
+		R = math.clamp(color.R + amount, 0, 1),
+		G = math.clamp(color.G + amount, 0, 1),
+		B = math.clamp(color.B + amount, 0, 1),
 		A = color.A,
 	}
 end
@@ -32,116 +24,264 @@ return function(params: typedefs.ScrollerParams, dt: number): (number, boolean, 
 	local window = params.window
 	local theme = params.theme
 
+	assert(storage, "Scroller requires RetainedStorage")
+	assert(id, "Scroller requires id")
+
 	local field = storage[id]
+
 	if not field then
 		field = {
-			scrollY = params.InitialScroll or 0,
-			scrollTarget = params.InitialScroll or 0,
+			scroll = params.InitialScroll or 0,
+			target = params.InitialScroll or 0,
+
 			dragging = false,
-			dragStartMouse = 0,
-			dragStartScroll = 0,
+			dragMouseStart = 0,
+			dragScrollStart = 0,
 		}
+
 		storage[id] = field
 	end
 
 	local vertical = params.Orientation ~= "horizontal"
-	local trackLength = vertical and params.height or params.width
-	local viewSize = params.ViewHeight or trackLength
-	local contentSize = math.max(params.ContentHeight or viewSize, viewSize)
-	local maxScroll = math.max(0, contentSize - viewSize)
-	local minThumb = params.MinThumbSize or 20
-	local thumbLength = math.clamp(trackLength * (viewSize / contentSize), minThumb, trackLength)
-	local scrollableTrack = math.max(trackLength - thumbLength, 0)
 
-	field.scrollTarget = math.clamp(field.scrollTarget, 0, maxScroll)
+	-- Visible viewport
+	local viewportWidth = params.width
+	local viewportHeight = params.height
 
-	local scrollbarWidth = params.ScrollbarWidth or 8
-	local scrollbarX = vertical and (params.x + params.width - scrollbarWidth) or params.x
+	local viewportSize = vertical and viewportHeight or viewportWidth
 
-	local trackRect = {
-		x = scrollbarX,
-		y = params.y,
-		width = vertical and scrollbarWidth or params.width,
-		height = vertical and params.height or scrollbarWidth,
-	}
+	-- Total size of the stuff inside
+	local contentSize
 
-	local thumbOffset = maxScroll > 0 and (field.scrollY / maxScroll) * scrollableTrack or 0
+	if vertical then
+		contentSize = math.max(params.ContentHeight or viewportHeight, viewportHeight)
+	else
+		contentSize = math.max(params.ContentWidth or viewportWidth, viewportWidth)
+	end
+
+	local maxScroll = math.max(0, contentSize - viewportSize)
+
+	field.target = math.clamp(field.target, 0, maxScroll)
+	field.scroll = math.clamp(field.scroll, 0, maxScroll)
+
+	-- =========================
+	-- Scrollbar geometry
+	-- =========================
+
+	local scrollbarWidth = params.ScrollbarWidth or 6
+	local minThumbSize = params.MinThumbSize or 20
+
+	local trackRect
+
+	if vertical then
+		trackRect = {
+			x = params.x + params.width - scrollbarWidth,
+			y = params.y,
+			width = scrollbarWidth,
+			height = params.height,
+		}
+	else
+		trackRect = {
+			x = params.x,
+			y = params.y + params.height - scrollbarWidth,
+			width = params.width,
+			height = scrollbarWidth,
+		}
+	end
+
+	local trackLength = vertical and trackRect.height or trackRect.width
+
+	local thumbLength
+
+	if maxScroll <= 0 then
+		thumbLength = trackLength
+	else
+		thumbLength = math.max(minThumbSize, trackLength * (viewportSize / contentSize))
+
+		thumbLength = math.min(thumbLength, trackLength)
+	end
+
+	local thumbTravel = math.max(0, trackLength - thumbLength)
+
+	local scrollRatio = if maxScroll > 0 then field.scroll / maxScroll else 0
+
+	local thumbOffset = scrollRatio * thumbTravel
+
 	local thumbRect
+
 	if vertical then
 		thumbRect = {
-			x = scrollbarX,
-			y = params.y + thumbOffset,
-			width = scrollbarWidth,
+			x = trackRect.x,
+			y = trackRect.y + thumbOffset,
+			width = trackRect.width,
 			height = thumbLength,
 		}
 	else
-		thumbRect = { x = params.x, y = params.y, width = thumbLength, height = params.height }
+		thumbRect = {
+			x = trackRect.x + thumbOffset,
+			y = trackRect.y,
+			width = thumbLength,
+			height = trackRect.height,
+		}
 	end
 
-	local mousePos = argon:GetMousePosition()
+	-- =========================
+	-- Input
+	-- =========================
+
+	local mouse = argon:GetMousePosition()
+
+	local hoveredViewport = renderer:isMouseInRect({
+		x = params.x,
+		y = params.y,
+		width = params.width,
+		height = params.height,
+	})
+
 	local hoveredTrack = renderer:isMouseInRect(trackRect)
 	local hoveredThumb = renderer:isMouseInRect(thumbRect)
-	local hoveredRegion = params.ScrollRegion and renderer:isMouseInRect(params.ScrollRegion) or false
 
-	local leftDown = argon:IsMouseButtonDown(LEFT_MOUSE_BUTTON)
 	local leftPressed = argon:IsMouseButtonPressed(LEFT_MOUSE_BUTTON)
+	local leftDown = argon:IsMouseButtonDown(LEFT_MOUSE_BUTTON)
 
-	if leftPressed and hoveredThumb and not field.dragging then
-		field.dragging = true
-		field.dragStartMouse = vertical and mousePos.Y or mousePos.X
-		field.dragStartScroll = field.scrollTarget
+	-- Mouse wheel
+	if hoveredViewport and not field.dragging and maxScroll > 0 then
+		local wheel = argon:GetMouseWheelMove()
+
+		if wheel ~= 0 then
+			field.target -= wheel * (params.ScrollSpeed or 40)
+			field.target = math.clamp(field.target, 0, maxScroll)
+		end
 	end
 
+	-- Start dragging scrollbar
+	if leftPressed and hoveredThumb and maxScroll > 0 then
+		field.dragging = true
+
+		field.dragMouseStart = if vertical then mouse.Y else mouse.X
+
+		field.dragScrollStart = field.scroll
+	end
+
+	-- Dragging scrollbar
 	if field.dragging then
 		if not leftDown then
 			field.dragging = false
 		else
-			local mouseNow = vertical and mousePos.Y or mousePos.X
-			local delta = mouseNow - field.dragStartMouse
-			local scrollRatio = scrollableTrack > 0 and (maxScroll / scrollableTrack) or 0
-			field.scrollTarget = math.clamp(field.dragStartScroll + delta * scrollRatio, 0, maxScroll)
-			field.scrollY = field.scrollTarget -- 1:1 tracking feels better than lerp while actively dragging
-		end
-	elseif leftPressed and hoveredTrack and not hoveredThumb then
-		local clickPos = vertical and (mousePos.Y - params.y) or (mousePos.X - params.x)
-		local ratio = scrollableTrack > 0 and math.clamp((clickPos - thumbLength / 2) / scrollableTrack, 0, 1) or 0
-		field.scrollTarget = ratio * maxScroll
-	end
+			local mousePosition = if vertical then mouse.Y else mouse.X
 
-	if not field.dragging and (hoveredTrack or hoveredRegion) then
-		local wheelDelta = argon:GetMouseWheelMove()
-		if wheelDelta ~= 0 then
-			field.scrollTarget = math.clamp(field.scrollTarget - wheelDelta * (params.ScrollSpeed or 40), 0, maxScroll)
+			local mouseDelta = mousePosition - field.dragMouseStart
+
+			if thumbTravel > 0 then
+				local pixelsToScroll = maxScroll / thumbTravel
+
+				field.target = field.dragScrollStart + mouseDelta * pixelsToScroll
+
+				field.target = math.clamp(field.target, 0, maxScroll)
+
+				-- Direct movement while dragging
+				field.scroll = field.target
+			end
 		end
 	end
 
+	-- Click scrollbar track
+	if leftPressed and hoveredTrack and not hoveredThumb and not field.dragging and maxScroll > 0 then
+		local mouseOnTrack
+
+		if vertical then
+			mouseOnTrack = mouse.Y - trackRect.y
+		else
+			mouseOnTrack = mouse.X - trackRect.x
+		end
+
+		local targetThumbPosition = mouseOnTrack - thumbLength * 0.5
+
+		local ratio = if thumbTravel > 0 then math.clamp(targetThumbPosition / thumbTravel, 0, 1) else 0
+
+		field.target = ratio * maxScroll
+	end
+
+	-- Smooth wheel / track scrolling
 	if not field.dragging then
-		field.scrollY = smoothTowards(field.scrollY, field.scrollTarget, params.ScrollLerpSpeed or 20, dt)
-		if math.abs(field.scrollY - field.scrollTarget) < 0.05 then
-			field.scrollY = field.scrollTarget
+		field.scroll = smoothTowards(field.scroll, field.target, params.ScrollLerpSpeed or 18, dt)
+
+		if math.abs(field.scroll - field.target) < 0.01 then
+			field.scroll = field.target
 		end
 	end
 
-	thumbOffset = maxScroll > 0 and (field.scrollY / maxScroll) * scrollableTrack or 0
-	if vertical then
-		thumbRect.y = params.y + thumbOffset
-	else
-		thumbRect.x = params.x + thumbOffset
+	-- =========================
+	-- Draw clipped contents
+	-- =========================
+
+	local cornerRadius = params.CornerRadius or theme.CornerRadius or 0
+
+	local contentX = params.ContentX or params.x
+	local contentY = params.ContentY or params.y
+
+	local clipRect = {
+		x = params.x,
+		y = params.y,
+		width = params.width,
+		height = params.height,
+	}
+
+	argon:Save(window)
+
+	argon:ClipRoundRect(window, clipRect, cornerRadius, cornerRadius)
+
+	if params.callback then
+		params.callback({
+			x = if vertical then contentX else contentX - field.scroll,
+
+			y = if vertical then contentY - field.scroll else contentY,
+
+			width = params.ContentWidth or params.width,
+			height = params.ContentHeight or params.height,
+
+			viewportX = params.x,
+			viewportY = params.y,
+			viewportWidth = params.width,
+			viewportHeight = params.height,
+
+			scrollY = if vertical then field.scroll else 0,
+			scrollX = if vertical then 0 else field.scroll,
+
+			scroll = field.scroll,
+
+			window = window,
+			renderer = renderer,
+			theme = theme,
+			RetainedStorage = storage,
+		})
 	end
 
-	local trackColor = params.TrackColor or theme.TrackColor or theme.BackgroundColor
-	local thumbColor = params.ThumbColor or theme.SecondaryColor
-	local thumbHoverColor = params.ThumbHoverColor or brighten(thumbColor, 0.12)
-	local thumbActiveColor = params.ThumbActiveColor or brighten(thumbColor, 0.2)
+	argon:Restore(window)
 
-	local drawnThumbColor = thumbColor
-	if field.dragging then
-		drawnThumbColor = thumbActiveColor
-	elseif hoveredThumb then
-		drawnThumbColor = thumbHoverColor
-	end
+	-- =========================
+	-- Scrollbar
+	-- =========================
 
 	if maxScroll > 0 then
+		-- Recalculate after scrolling
+		scrollRatio = field.scroll / maxScroll
+		thumbOffset = scrollRatio * thumbTravel
+
+		if vertical then
+			thumbRect.y = trackRect.y + thumbOffset
+		else
+			thumbRect.x = trackRect.x + thumbOffset
+		end
+
+		local trackColor = params.TrackColor or theme.TrackColor
+
+		local thumbColor = params.ThumbColor or theme.SecondaryColor
+
+		local thumbHoverColor = params.ThumbHoverColor or brighten(thumbColor, 0.10)
+
+		local thumbActiveColor = params.ThumbActiveColor or brighten(thumbColor, 0.18)
+
 		if trackColor then
 			argon:DrawRectangle(window, {
 				x = trackRect.x,
@@ -152,48 +292,26 @@ return function(params: typedefs.ScrollerParams, dt: number): (number, boolean, 
 			})
 		end
 
+		local color = thumbColor
+
+		if field.dragging then
+			color = thumbActiveColor
+		elseif hoveredThumb then
+			color = thumbHoverColor
+		end
+
 		argon:DrawRectangle(window, {
 			x = thumbRect.x,
 			y = thumbRect.y,
-			width = scrollbarWidth,
+			width = thumbRect.width,
 			height = thumbRect.height,
-			Color = drawnThumbColor,
+			Color = color,
 		})
 	end
 
 	if params.OnScroll then
-		params.OnScroll(field.scrollY)
+		params.OnScroll(field.scroll)
 	end
 
-	if params.callback then
-		local contentX = params.ContentX or params.x
-		local contentY = params.ContentY or params.y
-		local cornerRadius = params.CornerRadius or theme.CornerRadius or 0
-
-		local clipRect
-		if vertical then
-			clipRect = { x = contentX, y = params.y, width = params.ContentWidth or params.width, height = viewSize }
-		else
-			clipRect = { x = params.x, y = contentY, width = viewSize, height = params.ContentWidth or params.height }
-		end
-
-		argon:Save(window)
-		argon:ClipRoundRect(window, clipRect, cornerRadius, cornerRadius)
-
-		params.callback({
-			x = vertical and contentX or (contentX - field.scrollY),
-			y = vertical and (contentY - field.scrollY) or contentY,
-			width = params.ContentWidth or params.width,
-			height = contentSize,
-			window = window,
-			theme = theme,
-			renderer = renderer,
-			RetainedStorage = storage,
-			scrollY = field.scrollY,
-		})
-
-		argon:Restore(window)
-	end
-
-	return field.scrollY, field.dragging, maxScroll
+	return field.scroll, field.dragging, maxScroll
 end

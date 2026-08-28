@@ -308,6 +308,22 @@ function KiRend.new(config: KiRendConf)
 				})
 			end,
 
+			CreateInstanceBatch = function(drawCalls, count)
+				return {
+					items = drawCalls,
+					count = count or #drawCalls,
+				}
+			end,
+
+			UpdateInstanceTransforms = function(batch, updates, count)
+				if batch then
+					batch.updates = updates
+					batch.updateCount = count or #updates
+				end
+			end,
+
+			DestroyInstanceBatch = function(batch) end,
+
 			DrawMeshInstanced = function(mesh, material, instances, count, begin, End, unloadAfterFrame)
 				table.insert(renderer_instanced_draw_calls, {
 					mesh = mesh,

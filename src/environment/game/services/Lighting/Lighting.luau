@@ -155,6 +155,15 @@ Lighting.InitRenderer = function(renderer, renderer_signal, datamodel)
 		argon:RGBA(46, 51, 61),
 		80000
 	)
+	argon:SetSunRays(renderer.Window, true, {
+		Distance = 4,
+		CutOffDistance = 1000,
+		MaximumOpacity = 0.58,
+		HeightFalloff = 0.018,
+		Density = 0.014,
+		InScatteringSize = 34,
+		Color = argon:RGBA(199, 214, 237),
+	})
 end
 
 return Lighting

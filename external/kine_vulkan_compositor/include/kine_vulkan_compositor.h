@@ -116,6 +116,11 @@ Kine_VulkanCompositor_FilamentPresent(
 KINE_VULKAN_COMPOSITOR_API void*
 Kine_VulkanCompositor_BeginFrame(KineVulkanCompositor* compositor);
 
+/* Waits for Filament to finish rendering the active image, then returns a
+   separate Skia surface for UI that must appear above the 3D scene. */
+KINE_VULKAN_COMPOSITOR_API void*
+Kine_VulkanCompositor_BeginOverlay(KineVulkanCompositor* compositor);
+
 /* Flushes Skia work, transitions the image to present layout, and presents. */
 KINE_VULKAN_COMPOSITOR_API int
 Kine_VulkanCompositor_EndFrame(KineVulkanCompositor* compositor);

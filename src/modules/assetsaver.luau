@@ -133,7 +133,7 @@ function assetsaver:GetGameAssets(game: KinemiumObject)
 					if success and buf then
 						resolved[value] = buf
 
-						old[object] = {}
+						old[object] = old[object] or {}
 						old[object][prop] = value
 
 						object[prop] = "kineasset://" .. basename

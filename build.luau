@@ -48,6 +48,40 @@ local function flagExists(flag: string)
 	return false
 end
 
+local function getFlagValue(flag: string): string?
+	local args = zune.process.args
+	for index, value in ipairs(args) do
+		if value == "--" .. flag then
+			return args[index + 1]
+		end
+	end
+	return nil
+end
+
+local embeddedGamePath = getFlagValue("embed-game")
+local embeddedGameModulePath = zjoin(".temp", "embedded-game-data.luau")
+if embeddedGamePath then
+	if zune.fs.stat(embeddedGamePath).kind ~= "file" then
+		error("embedded game file does not exist: " .. embeddedGamePath)
+	end
+
+	local gameData = zune.fs.readFile(embeddedGamePath, true)
+	local encoded = zune.serde.base64.encode(gameData)
+	if type(encoded) == "buffer" then
+		encoded = buffer.tostring(encoded)
+	end
+
+	local encodedChunks = {}
+	for index = 1, #encoded, 65536 do
+		table.insert(encodedChunks, `"{encoded:sub(index, index + 65535)}"`)
+	end
+	local moduleSource = "local encoded = table.concat({\n"
+		.. table.concat(encodedChunks, ",\n")
+		.. "\n})\nreturn buffer.fromstring(zune.serde.base64.decode(encoded))"
+	zune.fs.writeFile(embeddedGameModulePath, moduleSource)
+	table.insert(include, embeddedGameModulePath)
+end
+
 local ext = ""
 
 local function copyLibraries(ext, bin, path)
@@ -151,4 +185,8 @@ end
 
 if b_freebsd or (not anyPlatform and zune.platform.os == "freebsd") then
 	buildExecutable("freebsd_x86-64", "", "so")
+end
+
+if embeddedGamePath then
+	pcall(zune.fs.deleteFile, embeddedGameModulePath)
 end

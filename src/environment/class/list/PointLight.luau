@@ -1,9 +1,7 @@
 -- description: "Emits light uniformly in all directions from a single point."
 local Vector3 = require("@Vector3")
 local Color3 = require("@Color3")
-
-local r3d = require("@raylibadapter")
-local rlib = r3d.lib
+local argon = require("@Argon")
 
 local propTable = {
 	Color = Color3.new(1, 1, 1),

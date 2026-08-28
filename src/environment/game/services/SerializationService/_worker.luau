@@ -2,16 +2,12 @@ local thread = zune.thread
 local serde = zune.serde
 local zstd = serde.zstd
 
-local encoder = require("@SerialEncoder")
-
 local function decompress(str)
-	local decompressed = zstd.decompress(str)
-	return encoder.decode(decompressed)
+	return zstd.decompress(str)
 end
 
 local function compress(tbl)
-	local encoded = encoder.encode(tbl)
-	return zstd.compress(encoded, { level = 1 })
+	return zstd.compress(tbl, { level = 1 })
 end
 
 while true do

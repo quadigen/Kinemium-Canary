@@ -15,6 +15,7 @@ extern "C" {
 typedef struct KineFilamentContext KineFilamentContext;
 typedef struct KineFilamentMesh    KineFilamentMesh;
 typedef struct KineFilamentTex     KineFilamentTex;
+typedef struct KineFilamentInstanceBatch KineFilamentInstanceBatch;
 
 #define KINE_FILAMENT_DRAW_CAST_SHADOWS    (1u << 0)
 #define KINE_FILAMENT_DRAW_RECEIVE_SHADOWS (1u << 1)
@@ -37,6 +38,14 @@ typedef struct KineFilamentDrawItem {
     uint32_t flags;
     uint32_t reserved;
 } KineFilamentDrawItem;
+
+typedef struct KineFilamentParticleItem {
+    float transform[16];
+    uint8_t r;
+    uint8_t g;
+    uint8_t b;
+    uint8_t a;
+} KineFilamentParticleItem;
 
 typedef struct KineGLTextureInfo {
     unsigned int id;
@@ -66,6 +75,9 @@ typedef struct KineFilamentVulkanBackend {
 #define KINE_MAT_NEON    2
 #define KINE_MAT_WATER   3
 #define KINE_MAT_OUTLINE 4
+#define KINE_MAT_GIZMO   5
+#define KINE_MAT_PARTICLE 6
+#define KINE_MAT_TERRAIN 7
 
 // Which arm/handle of a gizmo is being interacted with.
 #define KINE_GIZMO_AXIS_NONE   0
@@ -104,8 +116,105 @@ KINE_API void Kine_Filament_SetViewport(KineFilamentContext* ctx, int x, int y, 
 
 KINE_API void Kine_Filament_CreateSky(KineFilamentContext* ctx, float r, float g, float b, float a);
 KINE_API void Kine_Filament_SetPostProcessing(KineFilamentContext* ctx, bool enabled);
+KINE_API void Kine_Filament_SetBloom(
+    KineFilamentContext* ctx,
+    bool enabled,
+    float strength,
+    int resolution,
+    int levels,
+    bool threshold,
+    bool lensFlare);
+KINE_API void Kine_Filament_SetAmbientOcclusion(
+    KineFilamentContext* ctx,
+    bool enabled,
+    float radius,
+    float power,
+    float intensity,
+    int quality,
+    int aoType);
+KINE_API void Kine_Filament_SetAntiAliasing(
+    KineFilamentContext* ctx,
+    bool fxaa,
+    bool taa,
+    bool msaa,
+    int sampleCount);
+KINE_API void Kine_Filament_SetDynamicResolution(
+    KineFilamentContext* ctx,
+    bool enabled,
+    float minScale,
+    float maxScale,
+    int quality,
+    float sharpness);
+KINE_API void Kine_Filament_SetDepthOfField(
+    KineFilamentContext* ctx,
+    bool enabled,
+    float cocScale,
+    float cocAspectRatio,
+    float maxApertureDiameter,
+    int maxForegroundCOC,
+    int maxBackgroundCOC);
+KINE_API void Kine_Filament_SetFocusDistance(KineFilamentContext* ctx, float distance);
+KINE_API void Kine_Filament_SetVignette(
+    KineFilamentContext* ctx,
+    bool enabled,
+    float midPoint,
+    float roundness,
+    float feather,
+    float r,
+    float g,
+    float b,
+    float a);
+KINE_API void Kine_Filament_SetScreenSpaceReflections(
+    KineFilamentContext* ctx,
+    bool enabled,
+    float thickness,
+    float bias,
+    float maxDistance,
+    float stride);
+KINE_API void Kine_Filament_SetColorGrading(
+    KineFilamentContext* ctx,
+    float exposure,
+    float contrast,
+    float saturation,
+    float vibrance,
+    float temperature,
+    float tint);
+KINE_API void Kine_Filament_ClearColorGrading(KineFilamentContext* ctx);
+KINE_API void Kine_Filament_SetRenderQuality(KineFilamentContext* ctx, int hdrQuality);
+KINE_API void Kine_Filament_SetDithering(KineFilamentContext* ctx, bool enabled);
+KINE_API void Kine_Filament_SetShadowOptions(KineFilamentContext* ctx, bool enabled, int shadowType);
+KINE_API void Kine_Filament_SetSunShadowOptions(
+    KineFilamentContext* ctx,
+    int mapSize,
+    int cascades,
+    float shadowFar,
+    float shadowNearHint,
+    float shadowFarHint,
+    bool stable,
+    bool contactShadows);
+KINE_API void Kine_Filament_SetSunRays(
+    KineFilamentContext* ctx,
+    bool enabled,
+    float distance,
+    float cutOffDistance,
+    float maximumOpacity,
+    float height,
+    float heightFalloff,
+    float density,
+    float inScatteringStart,
+    float inScatteringSize,
+    float r,
+    float g,
+    float b,
+    bool fogColorFromIbl);
 KINE_API KineFilamentTex* Kine_Filament_CreateTexFromPixels(
     KineFilamentContext* ctx,
+    int width, int height,
+    int rowBytes,
+    const void* pixelsRGBA8);
+KINE_API bool Kine_Filament_UpdateTexFromPixels(
+    KineFilamentContext* ctx,
+    KineFilamentTex* tex,
     int width, int height,
     int rowBytes,
     const void* pixelsRGBA8);
@@ -119,7 +228,19 @@ KINE_API KineFilamentTex* Kine_Filament_CreatePbrTexFromPixels(
     const void* normalRGBA8,
     int ormWidth, int ormHeight,
     int ormRowBytes,
-    const void* ormRGBA8);
+    const void* ormRGBA8,
+    int heightWidth, int heightHeight,
+    int heightRowBytes,
+    const void* heightRGBA8,
+    float heightScale);
+KINE_API KineFilamentTex* Kine_Filament_CreateTerrainTextureSet(
+    KineFilamentContext* ctx,
+    KineFilamentTex* layer0,
+    KineFilamentTex* layer1,
+    KineFilamentTex* layer2,
+    KineFilamentTex* layer3,
+    KineFilamentTex* layer4,
+    KineFilamentTex* layer5);
 KINE_API void* Kine_Filament_GetEngine(KineFilamentContext* ctx);
 KINE_API void* Kine_Filament_GetScene(KineFilamentContext* ctx);
 KINE_API void* Kine_Filament_GetView(KineFilamentContext* ctx);
@@ -139,7 +260,7 @@ KINE_API void Kine_Filament_SetCameraPerspective(
 KINE_API void Kine_Filament_SetCameraPosition(KineFilamentContext* ctx, float x, float y, float z);
 KINE_API void Kine_Filament_SetCameraDirection(KineFilamentContext* ctx, float dx, float dy, float dz);
 
-// shape: 1 = cube, 2 = sphere, 3 = pyramid,
+// shape: 1 = cube, 2 = sphere, 3 = pyramid, 4 = quad,
 //        10 = move gizmo, 11 = rotate gizmo, 12 = scale gizmo
 KINE_API KineFilamentMesh* Kine_Filament_CreateMesh(KineFilamentContext* ctx, int shape);
 KINE_API KineFilamentMesh* Kine_Filament_CreateMeshFromPath(KineFilamentContext* ctx, const char* path);
@@ -154,11 +275,11 @@ KINE_API void             Kine_Filament_DestroyTex(KineFilamentContext* ctx, Kin
 // ---------------------------------------------------------------------------
 // DrawMeshEx -- queues a mesh to be drawn this frame with a chosen material.
 //
-//   materialKind : one of KINE_MAT_DEFAULT / KINE_MAT_GLASS / KINE_MAT_NEON / KINE_MAT_WATER / KINE_MAT_OUTLINE
+//   materialKind : one of the KINE_MAT_* constants above
 //   r,g,b        : base/emissive color [0..1]
 //   param1       : roughness (default/glass/water) or intensity (neon)
 //   param2       : metallic (default) or ior (glass/water) -- unused for neon
-//   param3       : uv tile scale (default), unused (neon), or thickness (glass/water)
+//   param3       : uv tile scale (default/terrain), unused (neon), or thickness (glass/water)
 //   transmission : unused (default/neon) or transmission (glass/water)
 //   mat4         : column-major float[16] world transform
 //   tex          : optional KineFilamentTex* (from Kine_Filament_CreateTex), nil for no texture
@@ -167,6 +288,13 @@ KINE_API void             Kine_Filament_DestroyTex(KineFilamentContext* ctx, Kin
 KINE_API KineFilamentMesh* Kine_Filament_CreateCustomMesh(
     KineFilamentContext* ctx,
     const float* vertexData,   // interleaved px,py,pz,nx,ny,nz,u,v — 8 floats/vertex
+    int vertexCount,
+    const uint16_t* indices,
+    int indexCount);
+KINE_API KineFilamentMesh* Kine_Filament_CreateTerrainMesh(
+    KineFilamentContext* ctx,
+    const float* vertexData,
+    const float* materialWeights, // 8 floats/vertex; first 6 are material weights
     int vertexCount,
     const uint16_t* indices,
     int indexCount);
@@ -205,6 +333,32 @@ KINE_API void Kine_Filament_DrawMeshListVersioned(
     uint64_t streamId,
     uint64_t version);
 
+KINE_API KineFilamentInstanceBatch* Kine_Filament_CreateInstanceBatch(
+    KineFilamentContext* ctx,
+    const KineFilamentDrawItem* items,
+    uint32_t itemCount);
+
+KINE_API void Kine_Filament_DestroyInstanceBatch(
+    KineFilamentInstanceBatch* batch);
+
+KINE_API void Kine_Filament_UpdateInstanceTransforms(
+    KineFilamentInstanceBatch* batch,
+    const uint32_t* indices,
+    const float* transforms,
+    uint32_t dirtyCount);
+
+KINE_API void Kine_Filament_DrawParticles(
+    KineFilamentContext* ctx,
+    KineFilamentTex* texture,
+    const KineFilamentParticleItem* items,
+    uint32_t itemCount,
+    float uvScaleX,
+    float uvScaleY,
+    float uvOffsetX,
+    float uvOffsetY,
+    bool castShadows,
+    bool culling);
+
 KINE_API void Kine_Filament_DrawMeshOutline(
     KineFilamentContext* ctx,
     KineFilamentMesh*    mesh,
@@ -218,6 +372,21 @@ KINE_API void Kine_Filament_DrawGizmo(
     float*               mat4,
     int                  hoveredAxis,
     int                  selectedAxis);
+KINE_API int Kine_Filament_PickGizmo(
+    KineFilamentContext* ctx,
+    KineFilamentGizmo* gizmo,
+    float* mat4,
+    float screenX,
+    float screenY);
+KINE_API float Kine_Filament_GetGizmoDragDelta(
+    KineFilamentContext* ctx,
+    KineFilamentGizmo* gizmo,
+    float* mat4,
+    int axis,
+    float startX,
+    float startY,
+    float currentX,
+    float currentY);
 
 // OpenGL path reads the offscreen GL color target. Vulkan builds intentionally
 // keep this disabled unless KINE_FILAMENT_VULKAN_READBACK=ON is set, because a

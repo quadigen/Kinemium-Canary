@@ -76,15 +76,7 @@ function vertbody.convexHullShape(points, maxConvexRadius)
 	maxConvexRadius = maxConvexRadius or 0.05
 
 	local vertPtr, vertCount = allocVec3Array(points)
-	local settings = lib.JPH_ConvexHullShapeSettings_Create(vertPtr, vertCount, maxConvexRadius)
-	if settings == ffi.null then
-		warn("[vertbody] JPH_ConvexHullShapeSettings_Create returned null")
-		return ffi.null
-	end
-
-	local shape = lib.JPH_ConvexHullShapeSettings_CreateShape(settings)
-	lib.JPH_ShapeSettings_Destroy(settings)
-
+	local shape = lib.JPH_ConvexHullShape_Create(vertPtr, vertCount, maxConvexRadius)
 	if shape == ffi.null then
 		warn("[vertbody] ConvexHull shape creation failed")
 	end
@@ -136,18 +128,10 @@ function vertbody.meshShape(points, triangles, indices)
 
 	local triPtr, triCount = allocJPH_TriangleArray(points, tris)
 
-	local settings = lib.JPH_MeshShapeSettings_Create(triPtr, triCount)
-	if settings == ffi.null then
-		warn("[vertbody] JPH_MeshShapeSettings_Create returned null")
-		return ffi.null
-	end
-
-	local shape = lib.JPH_MeshShapeSettings_CreateShape(settings)
+	local shape = lib.JPH_MeshShape_Create(triPtr, triCount)
 	if shape == ffi.null then
 		warn("[vertbody] Mesh shape creation failed")
 	end
-
-	lib.JPH_ShapeSettings_Destroy(settings)
 	return shape
 end
 
@@ -196,6 +180,7 @@ function vertbody.createBody(bodyInterface, shape, opts)
 	local activation = (opts.activate == false) and 1 or 0 -- 0=Activate 1=DontActivate
 
 	local bodySettings = lib.JPH_BodyCreationSettings_Create3(shape, posPtr, rotPtr, motionType, layer)
+	lib.JPH_Shape_Destroy(shape)
 	if bodySettings == ffi.null then
 		warn("[vertbody] JPH_BodyCreationSettings_Create3 returned null")
 		return nil
@@ -205,13 +190,16 @@ function vertbody.createBody(bodyInterface, shape, opts)
 		lib.JPH_BodyCreationSettings_SetAllowSleeping(bodySettings, 1)
 	end
 
-	local bodyID = lib.JPH_BodyInterface_CreateAndAddBody(bodyInterface, bodySettings, activation)
+	local body = lib.JPH_BodyInterface_CreateBody(bodyInterface, bodySettings)
 	lib.JPH_BodyCreationSettings_Destroy(bodySettings)
 
-	if bodyID == nil then
-		warn("[vertbody] CreateAndAddBody failed")
+	if body == ffi.null then
+		warn("[vertbody] CreateBody failed")
 		return nil
 	end
+
+	local bodyID = lib.JPH_Body_GetID(body)
+	lib.JPH_BodyInterface_AddBody(bodyInterface, bodyID, activation)
 
 	return bodyID
 end

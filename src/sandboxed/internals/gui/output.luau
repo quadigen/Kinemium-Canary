@@ -5,6 +5,14 @@ local theme = StudioThemeService.SelectedTheme
 local Argon = require("@Argon")
 local storage = {}
 
+if IsServer then
+	return
+end
+
+if IsClient then
+	return
+end
+
 repeat
 	task.wait()
 until game.CoreGui:FindFirstChild("Studio")

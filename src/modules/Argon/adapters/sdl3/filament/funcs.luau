@@ -15,6 +15,9 @@ local KineMaterialKind = {
 	Neon = 2,
 	Water = 3,
 	Outline = 4,
+	Gizmo = 5,
+	Particle = 6,
+	Terrain = 7,
 }
 
 export type Fns = {
@@ -37,6 +40,107 @@ export type Fns = {
 
 	Kine_Filament_CreateSky: (ctx: FFIPointer, r: float, g: float, b: float, a: float) -> (),
 	Kine_Filament_SetPostProcessing: (ctx: FFIPointer, enabled: bool) -> (),
+	Kine_Filament_SetBloom: (
+		ctx: FFIPointer,
+		enabled: bool,
+		strength: float,
+		resolution: int,
+		levels: int,
+		threshold: bool,
+		lensFlare: bool
+	) -> (),
+	Kine_Filament_SetAmbientOcclusion: (
+		ctx: FFIPointer,
+		enabled: bool,
+		radius: float,
+		power: float,
+		intensity: float,
+		quality: int,
+		aoType: int
+	) -> (),
+	Kine_Filament_SetAntiAliasing: (
+		ctx: FFIPointer,
+		fxaa: bool,
+		taa: bool,
+		msaa: bool,
+		sampleCount: int
+	) -> (),
+	Kine_Filament_SetDynamicResolution: (
+		ctx: FFIPointer,
+		enabled: bool,
+		minScale: float,
+		maxScale: float,
+		quality: int,
+		sharpness: float
+	) -> (),
+	Kine_Filament_SetDepthOfField: (
+		ctx: FFIPointer,
+		enabled: bool,
+		cocScale: float,
+		cocAspectRatio: float,
+		maxApertureDiameter: float,
+		maxForegroundCOC: int,
+		maxBackgroundCOC: int
+	) -> (),
+	Kine_Filament_SetFocusDistance: (ctx: FFIPointer, distance: float) -> (),
+	Kine_Filament_SetVignette: (
+		ctx: FFIPointer,
+		enabled: bool,
+		midPoint: float,
+		roundness: float,
+		feather: float,
+		r: float,
+		g: float,
+		b: float,
+		a: float
+	) -> (),
+	Kine_Filament_SetScreenSpaceReflections: (
+		ctx: FFIPointer,
+		enabled: bool,
+		thickness: float,
+		bias: float,
+		maxDistance: float,
+		stride: float
+	) -> (),
+	Kine_Filament_SetColorGrading: (
+		ctx: FFIPointer,
+		exposure: float,
+		contrast: float,
+		saturation: float,
+		vibrance: float,
+		temperature: float,
+		tint: float
+	) -> (),
+	Kine_Filament_ClearColorGrading: (ctx: FFIPointer) -> (),
+	Kine_Filament_SetRenderQuality: (ctx: FFIPointer, hdrQuality: int) -> (),
+	Kine_Filament_SetDithering: (ctx: FFIPointer, enabled: bool) -> (),
+	Kine_Filament_SetShadowOptions: (ctx: FFIPointer, enabled: bool, shadowType: int) -> (),
+	Kine_Filament_SetSunShadowOptions: (
+		ctx: FFIPointer,
+		mapSize: int,
+		cascades: int,
+		shadowFar: float,
+		shadowNearHint: float,
+		shadowFarHint: float,
+		stable: bool,
+		contactShadows: bool
+	) -> (),
+	Kine_Filament_SetSunRays: (
+		ctx: FFIPointer,
+		enabled: bool,
+		distance: float,
+		cutOffDistance: float,
+		maximumOpacity: float,
+		height: float,
+		heightFalloff: float,
+		density: float,
+		inScatteringStart: float,
+		inScatteringSize: float,
+		r: float,
+		g: float,
+		b: float,
+		fogColorFromIbl: bool
+	) -> (),
 
 	Kine_Filament_SetSkyAtmosphere: (
 		ctx: FFIPointer,
@@ -118,6 +222,14 @@ export type Fns = {
 		indices: FFIPointer,
 		indexCount: int
 	) -> FFIPointer,
+	Kine_Filament_CreateTerrainMesh: (
+		ctx: FFIPointer,
+		vertexData: FFIPointer,
+		materialWeights: FFIPointer,
+		vertexCount: int,
+		indices: FFIPointer,
+		indexCount: int
+	) -> FFIPointer,
 	Kine_Filament_UpdateCustomMesh: (
 		ctx: FFIPointer,
 		mesh: FFIPointer,
@@ -128,10 +240,27 @@ export type Fns = {
 	-- Texture system
 	-- glTexture: pointer to KineGLTextureInfo { id, width, height, mipmaps, format }
 	Kine_Filament_CreateTex: (ctx: FFIPointer, glTexture: FFIPointer) -> FFIPointer,
+	Kine_Filament_UpdateTexFromPixels: (
+		ctx: FFIPointer,
+		tex: FFIPointer,
+		width: int,
+		height: int,
+		rowBytes: int,
+		pixelsRGBA8: FFIPointer
+	) -> bool,
+	Kine_Filament_CreateTerrainTextureSet: (
+		ctx: FFIPointer,
+		layer0: FFIPointer,
+		layer1: FFIPointer,
+		layer2: FFIPointer,
+		layer3: FFIPointer,
+		layer4: FFIPointer,
+		layer5: FFIPointer
+	) -> FFIPointer,
 	Kine_Filament_DestroyTex: (ctx: FFIPointer, tex: FFIPointer) -> (),
 
 	-- Draw call (queued this frame, batched+instanced internally)
-	-- materialKind: 0=default, 1=glass, 2=neon, 3=water
+	-- materialKind: 0=default, 1=glass, 2=neon, 3=water, 7=terrain
 	-- param1/param2/param3: roughness/ior/thickness (glass/water), intensity/unused/unused (neon)
 	-- transmission: glass/water only
 	-- mat4: pointer to float[16] column-major world transform
@@ -161,6 +290,30 @@ export type Fns = {
 		streamId: number,
 		version: number
 	) -> (),
+	Kine_Filament_CreateInstanceBatch: (
+		ctx: FFIPointer,
+		items: FFIPointer,
+		itemCount: uint
+	) -> FFIPointer,
+	Kine_Filament_DestroyInstanceBatch: (batch: FFIPointer) -> (),
+	Kine_Filament_UpdateInstanceTransforms: (
+		batch: FFIPointer,
+		indices: FFIPointer,
+		transforms: FFIPointer,
+		dirtyCount: uint
+	) -> (),
+	Kine_Filament_DrawParticles: (
+		ctx: FFIPointer,
+		texture: FFIPointer?,
+		items: FFIPointer,
+		itemCount: uint,
+		uvScaleX: float,
+		uvScaleY: float,
+		uvOffsetX: float,
+		uvOffsetY: float,
+		castShadows: bool,
+		culling: bool
+	) -> (),
 	Kine_Filament_DrawMeshOutline: (
 		ctx: FFIPointer,
 		mesh: FFIPointer,
@@ -177,6 +330,23 @@ export type Fns = {
 		hoveredAxis: int,
 		selectedAxis: int
 	) -> (),
+	Kine_Filament_PickGizmo: (
+		ctx: FFIPointer,
+		gizmo: FFIPointer,
+		mat4: FFIPointer,
+		screenX: float,
+		screenY: float
+	) -> int,
+	Kine_Filament_GetGizmoDragDelta: (
+		ctx: FFIPointer,
+		gizmo: FFIPointer,
+		mat4: FFIPointer,
+		axis: int,
+		startX: float,
+		startY: float,
+		currentX: float,
+		currentY: float
+	) -> float,
 
 	-- Point light management. Returns an opaque int light ID, or -1 on failure.
 	-- position/color are passed as three separate floats (x, y, z).
@@ -283,6 +453,17 @@ local funcs = {
 		returns = ffi.types.pointer,
 		args = { ffi.types.pointer, ffi.types.i32, ffi.types.i32, ffi.types.i32, ffi.types.pointer },
 	},
+	Kine_Filament_UpdateTexFromPixels = {
+		returns = ffi.types.u8,
+		args = {
+			ffi.types.pointer,
+			ffi.types.pointer,
+			ffi.types.i32,
+			ffi.types.i32,
+			ffi.types.i32,
+			ffi.types.pointer,
+		},
+	},
 	Kine_Filament_CreatePbrTexFromPixels = {
 		returns = ffi.types.pointer,
 		args = {
@@ -299,6 +480,12 @@ local funcs = {
 			ffi.types.i32,
 			ffi.types.i32,
 			ffi.types.pointer,
+			-- height map
+			ffi.types.i32,
+			ffi.types.i32,
+			ffi.types.i32,
+			ffi.types.pointer,
+			ffi.types.float,
 		},
 	},
 	Kine_Filament_GetHeight = {
@@ -326,6 +513,132 @@ local funcs = {
 	Kine_Filament_SetPostProcessing = {
 		returns = ffi.types.void,
 		args = { ffi.types.pointer, ffi.types.u8 },
+	},
+	Kine_Filament_SetBloom = {
+		returns = ffi.types.void,
+		args = {
+			ffi.types.pointer,
+			ffi.types.u8,
+			ffi.types.float,
+			ffi.types.i32,
+			ffi.types.i32,
+			ffi.types.u8,
+			ffi.types.u8,
+		},
+	},
+	Kine_Filament_SetAmbientOcclusion = {
+		returns = ffi.types.void,
+		args = {
+			ffi.types.pointer,
+			ffi.types.u8,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.i32,
+			ffi.types.i32,
+		},
+	},
+	Kine_Filament_SetAntiAliasing = {
+		returns = ffi.types.void,
+		args = { ffi.types.pointer, ffi.types.u8, ffi.types.u8, ffi.types.u8, ffi.types.i32 },
+	},
+	Kine_Filament_SetDynamicResolution = {
+		returns = ffi.types.void,
+		args = { ffi.types.pointer, ffi.types.u8, ffi.types.float, ffi.types.float, ffi.types.i32, ffi.types.float },
+	},
+	Kine_Filament_SetDepthOfField = {
+		returns = ffi.types.void,
+		args = {
+			ffi.types.pointer,
+			ffi.types.u8,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.i32,
+			ffi.types.i32,
+		},
+	},
+	Kine_Filament_SetFocusDistance = {
+		returns = ffi.types.void,
+		args = { ffi.types.pointer, ffi.types.float },
+	},
+	Kine_Filament_SetVignette = {
+		returns = ffi.types.void,
+		args = {
+			ffi.types.pointer,
+			ffi.types.u8,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+		},
+	},
+	Kine_Filament_SetScreenSpaceReflections = {
+		returns = ffi.types.void,
+		args = { ffi.types.pointer, ffi.types.u8, ffi.types.float, ffi.types.float, ffi.types.float, ffi.types.float },
+	},
+	Kine_Filament_SetColorGrading = {
+		returns = ffi.types.void,
+		args = {
+			ffi.types.pointer,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+		},
+	},
+	Kine_Filament_ClearColorGrading = {
+		returns = ffi.types.void,
+		args = { ffi.types.pointer },
+	},
+	Kine_Filament_SetRenderQuality = {
+		returns = ffi.types.void,
+		args = { ffi.types.pointer, ffi.types.i32 },
+	},
+	Kine_Filament_SetDithering = {
+		returns = ffi.types.void,
+		args = { ffi.types.pointer, ffi.types.u8 },
+	},
+	Kine_Filament_SetShadowOptions = {
+		returns = ffi.types.void,
+		args = { ffi.types.pointer, ffi.types.u8, ffi.types.i32 },
+	},
+	Kine_Filament_SetSunShadowOptions = {
+		returns = ffi.types.void,
+		args = {
+			ffi.types.pointer,
+			ffi.types.i32,
+			ffi.types.i32,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.u8,
+			ffi.types.u8,
+		},
+	},
+	Kine_Filament_SetSunRays = {
+		returns = ffi.types.void,
+		args = {
+			ffi.types.pointer,
+			ffi.types.u8,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.u8,
+		},
 	},
 
 	Kine_Filament_SetSkyAtmosphere = {
@@ -433,6 +746,17 @@ local funcs = {
 			ffi.types.i32, -- indexCount
 		},
 	},
+	Kine_Filament_CreateTerrainMesh = {
+		returns = ffi.types.pointer,
+		args = {
+			ffi.types.pointer, -- ctx
+			ffi.types.pointer, -- vertexData (float*)
+			ffi.types.pointer, -- materialWeights (float[8] per vertex)
+			ffi.types.i32, -- vertexCount
+			ffi.types.pointer, -- indices (uint16_t*)
+			ffi.types.i32, -- indexCount
+		},
+	},
 	Kine_Filament_UpdateCustomMesh = {
 		returns = ffi.types.u8,
 		args = {
@@ -447,6 +771,18 @@ local funcs = {
 	Kine_Filament_CreateTex = {
 		returns = ffi.types.pointer,
 		args = { ffi.types.pointer, ffi.types.pointer },
+	},
+	Kine_Filament_CreateTerrainTextureSet = {
+		returns = ffi.types.pointer,
+		args = {
+			ffi.types.pointer,
+			ffi.types.pointer,
+			ffi.types.pointer,
+			ffi.types.pointer,
+			ffi.types.pointer,
+			ffi.types.pointer,
+			ffi.types.pointer,
+		},
 	},
 	Kine_Filament_DestroyTex = {
 		returns = ffi.types.void,
@@ -492,6 +828,44 @@ local funcs = {
 			ffi.types.u64, -- version
 		},
 	},
+	Kine_Filament_CreateInstanceBatch = {
+		returns = ffi.types.pointer,
+		args = {
+			ffi.types.pointer, -- ctx
+			ffi.types.pointer, -- KineFilamentDrawItem[]
+			ffi.types.u32, -- itemCount
+		},
+	},
+	Kine_Filament_DestroyInstanceBatch = {
+		returns = ffi.types.void,
+		args = {
+			ffi.types.pointer, -- KineFilamentInstanceBatch*
+		},
+	},
+	Kine_Filament_UpdateInstanceTransforms = {
+		returns = ffi.types.void,
+		args = {
+			ffi.types.pointer, -- KineFilamentInstanceBatch*
+			ffi.types.pointer, -- uint32_t[]
+			ffi.types.pointer, -- float[16][]
+			ffi.types.u32, -- dirtyCount
+		},
+	},
+	Kine_Filament_DrawParticles = {
+		returns = ffi.types.void,
+		args = {
+			ffi.types.pointer, -- ctx
+			ffi.types.pointer, -- KineFilamentTex*
+			ffi.types.pointer, -- KineFilamentParticleItem[]
+			ffi.types.u32, -- itemCount
+			ffi.types.float, -- uvScaleX
+			ffi.types.float, -- uvScaleY
+			ffi.types.float, -- uvOffsetX
+			ffi.types.float, -- uvOffsetY
+			ffi.types.u8, -- castShadows
+			ffi.types.u8, -- culling
+		},
+	},
 	Kine_Filament_DrawMeshOutline = {
 		returns = ffi.types.void,
 		args = {
@@ -512,6 +886,29 @@ local funcs = {
 			ffi.types.pointer, -- mat4 float[16]
 			ffi.types.i32, -- hoveredAxis
 			ffi.types.i32, -- selectedAxis
+		},
+	},
+	Kine_Filament_PickGizmo = {
+		returns = ffi.types.i32,
+		args = {
+			ffi.types.pointer,
+			ffi.types.pointer,
+			ffi.types.pointer,
+			ffi.types.float,
+			ffi.types.float,
+		},
+	},
+	Kine_Filament_GetGizmoDragDelta = {
+		returns = ffi.types.float,
+		args = {
+			ffi.types.pointer,
+			ffi.types.pointer,
+			ffi.types.pointer,
+			ffi.types.i32,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
 		},
 	},
 

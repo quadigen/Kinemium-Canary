@@ -4,8 +4,7 @@ local UDim2 = require("@UDim2")
 local Frame = require("@Frame")
 local Color3 = require("@Color3")
 local Enum = require("@EnumMap")
-local adapter = require("@RaylibAdapter")
-local lib = adapter.lib
+local argon = require("@Argon")
 local GuiObject = require("@GuiObject")
 local RichText = require("@Kinemium.richtext")
 
@@ -42,32 +41,22 @@ local propTable = {
 
 Frame.inherit(propTable)
 
-local defaultFont = lib.GetFontDefault()
+local DEFAULT_FONT_PATH = "./src/assets/fonts/Montserrat-Regular.ttf"
+local defaultFont = argon:CreateFont(DEFAULT_FONT_PATH)
 
-propTable.render = function(lib, object, dt, structs, renderer)
-	local framePos, frameSize = GuiObject.render(lib, object, dt, adapter.structs, renderer)
+propTable.render = function(window, object, dt, renderer)
+	local framePos, frameSize = GuiObject.render(window, object, dt, renderer)
 	if not object.Visible or not framePos or not frameSize then
 		return
 	end
+
 	local layout, spacing = RichText.GetLayout(object, frameSize, renderer, defaultFont)
 	if not layout then
 		return framePos, frameSize
 	end
+	RichText.DrawLayout(argon, window, object, framePos, frameSize, layout, spacing)
 
-	local blend = object:FindFirstChildOfClass("UIBlend")
-	local didBlend = false
-	if blend and blend.Enabled ~= false and blend.AffectSelf ~= false then
-		lib.BeginBlendMode(GuiObject.resolveBlendMode(raylib, blend.Mode))
-		didBlend = true
-	end
-
-	RichText.DrawLayout(lib, object, framePos, frameSize, layout, spacing)
-
-	if didBlend then
-		lib.EndBlendMode()
-	end
-
-	GuiObject.renderChildren(lib, object, dt, structs, renderer)
+	GuiObject.renderChildren(window, object, dt, renderer)
 
 	return framePos, frameSize
 end
