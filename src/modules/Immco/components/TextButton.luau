@@ -16,19 +16,12 @@ return function(params: typedefs.TextButtonParams, dt: number)
 		height = params.height,
 	}, cornerRadius, cornerRadius)
 
-	local backgroundColor = {
-		R = params.Color.R,
-		G = params.Color.G,
-		B = params.Color.B,
-		A = params.BgVisible and 255 or 0,
-	}
-
 	argon:DrawRectangle(window, {
 		x = params.x,
 		y = params.y,
 		width = params.width,
 		height = params.height,
-		Color = argon:RGBA(backgroundColor.R, backgroundColor.G, backgroundColor.B, backgroundColor.A),
+		Color = params.Color,
 	})
 
 	local text = params.text or "Text"

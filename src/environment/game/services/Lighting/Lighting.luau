@@ -48,11 +48,6 @@ function Lighting:GetSunDirection()
 	return calculateSunDirection(self.ClockTime, self.GeographicLatitude)
 end
 
-local function setAllEnvironmentEffects()
-	local environment: FFIPointer = rlib.R3D_GetEnvironment()
-	rlib.R3D_SetEnvironment(environment)
-end
-
 Lighting.InitRenderer = function(renderer, renderer_signal, datamodel)
 	if _G.IsHeadless then
 		return
@@ -71,6 +66,7 @@ Lighting.InitRenderer = function(renderer, renderer_signal, datamodel)
 		ClockTime = 14.0,
 		GeographicLatitude = 0.0,
 		EnableDayCycle = false,
+		GraphicsPreset = Enum.KinemiumGraphicsPreset.Medium,
 
 		GetDaylight = function()
 			local t = getDayAlpha(Lighting.ClockTime)
@@ -78,6 +74,15 @@ Lighting.InitRenderer = function(renderer, renderer_signal, datamodel)
 		end,
 	})
 	Lighting._Intents = Enum.PluginIntents.Graphics
+
+	Lighting.Changed:Connect(function(property)
+		if property == "GraphicsPreset" then
+			print("Changed preset")
+			local val = Lighting.GraphicsPreset.Value
+			argon:SetPostProcessingPreset(renderer.Window, val)
+		end
+	end)
+	argon:SetPostProcessingPreset(renderer.Window, "medium")
 
 	local FilamentContext = renderer.FilamentContext
 	local Filament = renderer.Filament

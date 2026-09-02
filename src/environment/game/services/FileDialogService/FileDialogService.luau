@@ -9,10 +9,6 @@ FileDialogService._Intents = Enum.PluginIntents.Filesystem
 local ffi = zune.ffi
 
 FileDialogService.InitRenderer = function(renderer, renderer_signal)
-	local nfd = require("@nfd")
-	local lib = nfd.lib
-	local structs = nfd.structs
-
 	local function stringToOSPtr(str)
 		if zune.platform.os ~= "windows" then
 			return BufferUtils.stringToPtr(str)

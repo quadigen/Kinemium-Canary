@@ -39,6 +39,8 @@
 #include <filament/Color.h>
 #include <filament/Skybox.h>
 #include <filament/IndirectLight.h>
+#include <filamat/MaterialBuilder.h>
+#include <filamat/Package.h>
 #include <backend/DriverEnums.h>
 #include <backend/Platform.h>
 #if KINE_FILAMENT_USE_VULKAN
@@ -88,6 +90,8 @@ struct VkQueue_T;
 #include <functional>
 #include <limits>
 #include <memory>
+#include <mutex>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -347,6 +351,12 @@ struct KineDecalResource {
     KineMesh* mesh = nullptr;
 };
 
+struct KineFilamentShader {
+    KineFilamentContext* ctx = nullptr;
+    Material* material = nullptr;
+    std::unordered_map<std::string, std::vector<float>> uniforms;
+};
+
 struct KineFilamentContext {
     Engine*          engine       = nullptr;
     SwapChain*       swapChain    = nullptr;
@@ -387,6 +397,9 @@ struct KineFilamentContext {
     Material* gizmoMaterial = nullptr;
     Material* particleMaterial = nullptr;
     Material* terrainMaterial = nullptr;
+	KineFilamentShader* globalShader = nullptr;
+	std::unordered_set<KineFilamentShader*> runtimeShaders;
+	std::unordered_set<KineFilamentInstanceBatch*> instanceBatches;
     KineMesh* particleQuadMesh = nullptr;
     float     time = 0.0f;   // accumulate once per frame for animation
 
@@ -1113,8 +1126,10 @@ static KineMesh* buildSphere(int slices = 16, int stacks = 12)
         for (int i = 0; i < slices; i++) {
             uint16_t a = (uint16_t)(j*(slices+1)+i);
             uint16_t b = (uint16_t)(a+slices+1);
-            m->indices.push_back(a);   m->indices.push_back(b);   m->indices.push_back(a+1);
-            m->indices.push_back(b);   m->indices.push_back(b+1); m->indices.push_back(a+1);
+            // Filament treats counter-clockwise triangles as front-facing. The
+            // original order pointed every sphere face inward.
+            m->indices.push_back(a);   m->indices.push_back(a+1); m->indices.push_back(b);
+            m->indices.push_back(b);   m->indices.push_back(a+1); m->indices.push_back(b+1);
         }
     }
     m->indexCount = (uint32_t)m->indices.size();
@@ -1585,8 +1600,22 @@ bool rebuildRenderTarget(KineFilamentContext* ctx, unsigned int textureId, int w
 // KineBatchKey, so it's correct for all of that batch's GPU instances to
 // share one MaterialInstance built this way.
 // ---------------------------------------------------------------------------
-static void kine_apply_material_params(MaterialInstance* mi, const KineBatchKey& key, float time, Texture* whiteTex)
+static void kine_apply_material_params(KineFilamentContext* ctx, MaterialInstance* mi, const KineBatchKey& key)
 {
+	if (ctx->globalShader && ctx->globalShader->material) {
+		for (const auto& [name, values] : ctx->globalShader->uniforms) {
+			switch (values.size()) {
+				case 1: mi->setParameter(name.c_str(), values[0]); break;
+				case 2: mi->setParameter(name.c_str(), math::float2{values[0], values[1]}); break;
+				case 3: mi->setParameter(name.c_str(), math::float3{values[0], values[1], values[2]}); break;
+				case 4: mi->setParameter(name.c_str(), math::float4{values[0], values[1], values[2], values[3]}); break;
+				default: break;
+			}
+		}
+		return;
+	}
+	const float time = ctx->time;
+	Texture* whiteTex = ctx->whiteTex;
     if (key.materialKind == KINE_MAT_GLASS) {
         // Keep the dielectric surface mostly neutral; use absorption below
         // for physically plausible colored transmission through the volume.
@@ -1752,6 +1781,7 @@ static Box kine_compute_dynamic_batch_bounds(
 
 static Material* kine_select_material(KineFilamentContext* ctx, int materialKind)
 {
+	if (ctx->globalShader && ctx->globalShader->material) return ctx->globalShader->material;
     if (materialKind == KINE_MAT_GLASS) return ctx->glassMaterial;
     if (materialKind == KINE_MAT_NEON) return ctx->neonMaterial;
     if (materialKind == KINE_MAT_WATER) return ctx->waterMaterial;
@@ -1785,6 +1815,9 @@ static KineBatchKey kine_draw_item_key(const KineFilamentDrawItem& item, uint64_
 static math::mat4f kine_draw_item_transform(const KineFilamentDrawItem& item)
 {
     const float* mat4 = item.transform;
+    // KineFilamentDrawItem carries four consecutive affine rows. math::mat4f
+    // accepts columns, so gather the matching element from each row. This is
+    // an intentional conversion, not an accidental transpose.
     return math::mat4f(
         math::float4{mat4[0], mat4[4], mat4[8],  mat4[12]},
         math::float4{mat4[1], mat4[5], mat4[9],  mat4[13]},
@@ -1823,7 +1856,7 @@ static bool kine_rebuild_instance_batch(KineFilamentInstanceBatch* batch)
     if (!batch->matInst) {
         batch->matInst = base->createInstance();
     }
-    kine_apply_material_params(batch->matInst, batch->key, ctx->time, ctx->whiteTex);
+    kine_apply_material_params(ctx, batch->matInst, batch->key);
 
     kine_destroy_instance_batch_chunks(batch);
 
@@ -1861,6 +1894,29 @@ static bool kine_rebuild_instance_batch(KineFilamentInstanceBatch* batch)
     }
 
     return true;
+}
+
+static void kine_destroy_built_batches(KineFilamentContext* ctx);
+
+static bool kine_switch_global_shader(KineFilamentContext* ctx, KineFilamentShader* shader)
+{
+    if (!ctx || (shader && shader->ctx != ctx)) return false;
+    if (ctx->globalShader == shader) return true;
+
+    kine_destroy_built_batches(ctx);
+    ctx->globalShader = shader;
+
+    bool rebuilt = true;
+    for (KineFilamentInstanceBatch* batch : ctx->instanceBatches) {
+        if (!batch) continue;
+        kine_destroy_instance_batch_chunks(batch);
+        if (batch->matInst) {
+            ctx->engine->destroy(batch->matInst);
+            batch->matInst = nullptr;
+        }
+        rebuilt = kine_rebuild_instance_batch(batch) && rebuilt;
+    }
+    return rebuilt;
 }
 
 static void kine_destroy_batch_chunks(
@@ -1928,7 +1984,7 @@ static void kine_update_batches(KineFilamentContext* ctx)
         if (!batch.matInst) {
             batch.matInst = base->createInstance();
         }
-        kine_apply_material_params(batch.matInst, key, ctx->time, ctx->whiteTex);
+        kine_apply_material_params(ctx, batch.matInst, key);
 
         std::vector<math::mat4f>& transforms = pending->transforms;
         const size_t requiredChunks = (transforms.size() + maxInstances - 1) / maxInstances;
@@ -1995,7 +2051,7 @@ static void kine_update_batches(KineFilamentContext* ctx)
     for (auto& [key, batch] : ctx->builtBatches) {
         if (batch.lastUsedFrame == ctx->batchFrame &&
             key.materialKind == KINE_MAT_WATER && batch.matInst) {
-            kine_apply_material_params(batch.matInst, key, ctx->time, ctx->whiteTex);
+			kine_apply_material_params(ctx, batch.matInst, key);
         }
     }
 
@@ -3124,6 +3180,14 @@ KINE_API void Kine_Filament_Destroy(KineFilamentContext* ctx)
     if (ctx->engine) {
         kine_destroy_built_batches(ctx);
         ctx->pendingBatches.clear();
+		for (KineFilamentInstanceBatch* batch : ctx->instanceBatches) {
+			if (!batch) continue;
+			kine_destroy_instance_batch_chunks(batch);
+			if (batch->matInst) ctx->engine->destroy(batch->matInst);
+			batch->matInst = nullptr;
+			batch->ctx = nullptr;
+		}
+		ctx->instanceBatches.clear();
         for (auto& decal : ctx->decals) {
             kine_destroy_decal(ctx, decal);
         }
@@ -3132,6 +3196,14 @@ KINE_API void Kine_Filament_Destroy(KineFilamentContext* ctx)
         // Material instance destruction is queued. Drain it before destroying
         // the materials that own those instances.
         ctx->engine->flushAndWait();
+		ctx->globalShader = nullptr;
+		for (KineFilamentShader* shader : ctx->runtimeShaders) {
+			if (!shader) continue;
+			if (shader->material) ctx->engine->destroy(shader->material);
+			shader->material = nullptr;
+			shader->ctx = nullptr;
+		}
+		ctx->runtimeShaders.clear();
 
         if (!ctx->sunLight.isNull()) {
             ctx->scene->remove(ctx->sunLight);
@@ -3624,7 +3696,7 @@ KINE_API bool Kine_Filament_SetDecalTransform(KineFilamentContext* ctx, int deca
     RenderableManager& rm = ctx->engine->getRenderableManager();
     if (!rm.hasComponent(entity)) return false;
 
-    // Same column-major transform -> filament mat4f conversion used in
+    // Same row-major transform -> Filament column-vector conversion used in
     // Kine_Filament_DrawMeshEx.
     math::mat4f transform(
         math::float4{mat4[0], mat4[4], mat4[8],  mat4[12]},
@@ -4125,7 +4197,7 @@ KINE_API void Kine_Filament_DestroyTex(KineFilamentContext* ctx, KineFilamentTex
 //   r,g,b        : base color [0..1]
 //   tex          : optional texture handle (may be NULL)
 //   transparency : [0..1], 0 = fully opaque, 1 = fully transparent
-//   mat4         : column-major float[16] world transform
+//   mat4         : row-major float[16] world transform
 //
 // Calls that share the same mesh, materialKind, color/params, and
 // shadow/culling flags are automatically batched together and issued as a
@@ -4357,6 +4429,7 @@ KINE_API KineFilamentInstanceBatch* Kine_Filament_CreateInstanceBatch(
         return nullptr;
     }
 
+    ctx->instanceBatches.insert(batch);
     return batch;
 }
 
@@ -4364,8 +4437,12 @@ KINE_API void Kine_Filament_DestroyInstanceBatch(KineFilamentInstanceBatch* batc
 {
     if (!batch) return;
     kine_destroy_instance_batch_chunks(batch);
-    if (batch->ctx && batch->ctx->engine && batch->matInst) {
-        batch->ctx->engine->destroy(batch->matInst);
+    KineFilamentContext* ctx = batch->ctx;
+    if (ctx) {
+        ctx->instanceBatches.erase(batch);
+    }
+    if (ctx && ctx->engine && batch->matInst) {
+        ctx->engine->destroy(batch->matInst);
     }
     delete batch;
 }
@@ -4703,6 +4780,89 @@ KINE_API int Kine_Filament_GetWidth(KineFilamentContext* ctx)
 KINE_API int Kine_Filament_GetHeight(KineFilamentContext* ctx)
 {
     return ctx ? ctx->height : 0;
+}
+
+static thread_local std::string kine_filament_shader_error;
+
+KINE_API KineFilamentShader* Kine_Filament_Shader_Create(
+    KineFilamentContext* ctx, const char* materialSource)
+{
+    kine_filament_shader_error.clear();
+    if (!ctx || !ctx->engine || !materialSource || !*materialSource) {
+        kine_filament_shader_error = "Filament material source is empty or no rendering context is available";
+        return nullptr;
+    }
+
+    static std::once_flag filamatInit;
+    std::call_once(filamatInit, [] { filamat::MaterialBuilder::init(); });
+
+    filamat::MaterialBuilder builder;
+    builder.platform(filamat::MaterialBuilder::Platform::DESKTOP)
+#if KINE_FILAMENT_USE_VULKAN
+        .targetApi(filamat::MaterialBuilder::TargetApi::VULKAN)
+#else
+        .targetApi(filamat::MaterialBuilder::TargetApi::OPENGL)
+#endif
+        .optimization(filamat::MaterialBuilder::Optimization::PERFORMANCE)
+        .materialSource(materialSource);
+
+    filamat::Package package = builder.build(ctx->engine->getJobSystem());
+    if (!package.isValid()) {
+        kine_filament_shader_error = "Filamat failed to compile the material source";
+        return nullptr;
+    }
+
+    Material* material = Material::Builder()
+        .package(package.getData(), package.getSize())
+        .build(*ctx->engine);
+    if (!material) {
+        kine_filament_shader_error = "Filament rejected the compiled material package";
+        return nullptr;
+    }
+
+    auto* shader = new KineFilamentShader();
+    shader->ctx = ctx;
+    shader->material = material;
+    ctx->runtimeShaders.insert(shader);
+    return shader;
+}
+
+KINE_API void Kine_Filament_Shader_Destroy(KineFilamentShader* shader)
+{
+    if (!shader) return;
+    KineFilamentContext* ctx = shader->ctx;
+    if (ctx && ctx->engine) {
+        if (ctx->globalShader == shader) {
+            kine_switch_global_shader(ctx, nullptr);
+        }
+        ctx->runtimeShaders.erase(shader);
+        if (shader->material) {
+            ctx->engine->flushAndWait();
+            ctx->engine->destroy(shader->material);
+        }
+    }
+    delete shader;
+}
+
+KINE_API bool Kine_Filament_Shader_SetUniform(
+    KineFilamentShader* shader, const char* name, const float* values, int valueCount)
+{
+    if (!shader || !shader->material || !name || !*name || !values || valueCount < 1 || valueCount > 4) {
+        return false;
+    }
+    if (!shader->material->hasParameter(name)) return false;
+    shader->uniforms[name] = std::vector<float>(values, values + valueCount);
+    return true;
+}
+
+KINE_API bool Kine_Filament_SetGlobalShader(KineFilamentContext* ctx, KineFilamentShader* shader)
+{
+    return kine_switch_global_shader(ctx, shader);
+}
+
+KINE_API const char* Kine_Filament_Shader_GetLastError(void)
+{
+    return kine_filament_shader_error.c_str();
 }
 
 } // extern "C" (ReadPixels block)

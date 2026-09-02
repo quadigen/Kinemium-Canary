@@ -33,7 +33,7 @@ local function sendSerialized(peer, data, reliable)
 	payload:write(0, serialized, 0, size)
 	local sent = enet.lib.Kine_ENet_Peer_Send(peer, reliable and 0 or 1, payload, size, reliable and 1 or 0)
 	ffi.free(payload)
-	return sent ~= 0
+	return sent ~= 0, size
 end
 
 function Client.new()
@@ -53,6 +53,7 @@ function Client.new()
 		_connectAttemptId = 0,
 		GnsConnected = false,
 		EnetConnected = false,
+		Stats = { bytesSent = 0, bytesReceived = 0, packetsSent = 0, packetsReceived = 0, malformedPackets = 0 },
 	}, Client)
 end
 
@@ -166,10 +167,13 @@ function Client:Poll()
 			local payload = enet.lib.Kine_ENet_Event_GetPayload(self._event)
 			local size = enet.lib.Kine_ENet_Event_GetPayloadSize(self._event)
 			local rawPayload = pointerToBuffer(payload, size)
+			self.Stats.bytesReceived += size
+			self.Stats.packetsReceived += 1
 			local ok, decoded = pcall(Serializer.Deserialize, rawPayload)
 			if ok and decoded then
 				self:HandlePacket(decoded)
 			else
+				self.Stats.malformedPackets += 1
 				warn("[ENet][Client] Failed to deserialize message from server")
 			end
 		elseif eventType == enet.Event.Disconnect and peer == self.hConn then
@@ -200,7 +204,16 @@ function Client:Send(data, reliable)
 	if not self.hConn or not self.EnetConnected then
 		return false
 	end
-	return sendSerialized(self.hConn, data, reliable == true)
+	local sent, size = sendSerialized(self.hConn, data, reliable == true)
+	if sent then
+		self.Stats.bytesSent += size or 0
+		self.Stats.packetsSent += 1
+	end
+	return sent
+end
+
+function Client:GetStats()
+	return table.clone(self.Stats)
 end
 
 function Client:OnRecieve(callback)

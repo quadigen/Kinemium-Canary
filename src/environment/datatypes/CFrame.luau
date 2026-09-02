@@ -864,9 +864,14 @@ function CFrame.fromQuaternion(x, y, z, w, pos)
 
 	local right = Vector3.new(m00, m10, m20)
 	local up = Vector3.new(m01, m11, m21)
-	local look = Vector3.new(-m02, -m12, -m22)
+	-- CFrame.fromMatrix takes the positive local Z/back basis as its fourth
+	-- argument. GetLookVector() negates that basis for Roblox-compatible look
+	-- semantics, but the stored rotation matrix must not. Negating it here
+	-- reflected every quaternion-reconstructed CFrame (determinant -1), which
+	-- notably made network-interpolated parts appear inside-out after moving.
+	local back = Vector3.new(m02, m12, m22)
 
-	return CFrame.fromMatrix(pos, right, up, look)
+	return CFrame.fromMatrix(pos, right, up, back)
 end
 
 function CFrame:GetMatrixData(scale)

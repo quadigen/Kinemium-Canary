@@ -16,16 +16,53 @@
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyInterface.h>
 #include <Jolt/Physics/Body/MotionProperties.h>
+#include <Jolt/Physics/Body/BodyLock.h>
+#include <Jolt/Physics/Body/BodyFilter.h>
 #include <Jolt/Physics/Collision/ContactListener.h>
+#include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
+#include <Jolt/Physics/Collision/RayCast.h>
+#include <Jolt/Physics/Constraints/Constraint.h>
+#include <Jolt/Physics/Constraints/FixedConstraint.h>
+#include <Jolt/Physics/Constraints/DistanceConstraint.h>
+#include <Jolt/Physics/Constraints/HingeConstraint.h>
+#include <Jolt/Physics/Constraints/SliderConstraint.h>
+#include <Jolt/Physics/Constraints/SixDOFConstraint.h>
 
 #include <vector>
 #include <deque>
 #include <mutex>
 #include <algorithm>
 #include <cstring>
+#include <cfloat>
 
 namespace
 {
+
+class BodyIDFilter final : public JPH::BodyFilter
+{
+public:
+    BodyIDFilter(const JPH_BodyID* bodyIDs, uint32_t count, bool include)
+        : mBodyIDs(bodyIDs), mCount(count), mInclude(include) {}
+
+    bool ShouldCollide(const JPH::BodyID& bodyID) const override
+    {
+        const JPH_BodyID packedID = bodyID.GetIndexAndSequenceNumber();
+        const bool found = mBodyIDs != nullptr
+            && std::find(mBodyIDs, mBodyIDs + mCount, packedID) != mBodyIDs + mCount;
+        return mInclude ? found : !found;
+    }
+
+    bool ShouldCollideLocked(const JPH::Body& body) const override
+    {
+        return ShouldCollide(body.GetID());
+    }
+
+private:
+    const JPH_BodyID* mBodyIDs;
+    uint32_t mCount;
+    bool mInclude;
+};
 
 inline JPH::Vec3 ToJPH(const JPH_Vec3& v)
 {
@@ -290,7 +327,12 @@ public:
         JPH::ContactSettings& /*ioSettings*/
     ) override
     {
-        Push(ContactEventType::Persisted, inBody1, inBody2, &inManifold, nullptr);
+        // Luau exposes Touched/TouchEnded, not a per-step persisted event. Do
+        // not flood the cross-FFI queue with one unused record per contact per
+        // physics step.
+        (void)inBody1;
+        (void)inBody2;
+        (void)inManifold;
     }
 
     void OnContactRemoved(const JPH::SubShapeIDPair& inSubShapePair) override
@@ -779,6 +821,54 @@ void JPH_PhysicsSystem_SetContactListener(JPH_PhysicsSystemRef system, JPH_Conta
     );
 }
 
+int32_t JPH_PhysicsSystem_CastRay(
+    JPH_PhysicsSystemRef system,
+    const JPH_RVec3* origin,
+    const JPH_Vec3* direction,
+    const JPH_BodyID* bodyIDs,
+    uint32_t bodyIDCount,
+    int32_t filterMode,
+    JPH_RayCastResult* outResult)
+{
+    if (system == nullptr || origin == nullptr || direction == nullptr || outResult == nullptr)
+        return 0;
+
+    JPH::PhysicsSystem* physicsSystem = ToPhysicsSystem(system);
+    const JPH::RRayCast ray(ToJPH(*origin), ToJPH(*direction));
+    JPH::RayCastResult hit;
+    const BodyIDFilter bodyFilter(bodyIDs, bodyIDCount, filterMode == 2);
+
+    const bool didHit = filterMode == 0
+        ? physicsSystem->GetNarrowPhaseQuery().CastRay(ray, hit)
+        : physicsSystem->GetNarrowPhaseQuery().CastRay(
+            ray,
+            hit,
+            JPH::BroadPhaseLayerFilter(),
+            JPH::ObjectLayerFilter(),
+            bodyFilter);
+    if (!didHit)
+        return 0;
+
+    const JPH::RVec3 hitPosition = ray.GetPointOnRay(hit.mFraction);
+    JPH::BodyLockRead lock(physicsSystem->GetBodyLockInterface(), hit.mBodyID);
+    if (!lock.Succeeded())
+        return 0;
+
+    const JPH::Body& body = lock.GetBody();
+    const JPH::RMat44 worldTransform = body.GetWorldTransform();
+    const JPH::Vec3 localHitPosition(worldTransform.Inversed() * hitPosition);
+    const JPH::Vec3 normal = worldTransform.Multiply3x3(
+        body.GetShape()->GetSurfaceNormal(
+            hit.mSubShapeID2,
+            localHitPosition)).Normalized();
+
+    outResult->position = FromJPH(hitPosition);
+    outResult->normal = FromJPH(normal);
+    outResult->bodyID = hit.mBodyID.GetIndexAndSequenceNumber();
+    outResult->fraction = hit.mFraction;
+    return 1;
+}
+
 JPH_BodyRef JPH_BodyInterface_CreateBody(JPH_BodyInterfaceRef bodyInterface, JPH_BodyCreationSettingsRef settings)
 {
     if (bodyInterface == nullptr || settings == nullptr)
@@ -1099,4 +1189,296 @@ uint32_t JPH_ContactListener_PollEvents(
         return 0;
 
     return reinterpret_cast<ManagedContactListener*>(listener)->Poll(*procs, maxEvents);
+}
+
+namespace
+{
+inline JPH::Constraint* ToConstraint(JPH_ConstraintRef constraint)
+{
+    return reinterpret_cast<JPH::Constraint*>(constraint);
+}
+
+inline JPH::EConstraintSpace ToConstraintSpace(int32_t space)
+{
+    return space == 0 ? JPH::EConstraintSpace::LocalToBodyCOM : JPH::EConstraintSpace::WorldSpace;
+}
+
+inline JPH::SpringSettings ToSpringSettings(const JPH_SpringSettings& settings)
+{
+    JPH::SpringSettings result;
+    result.mMode = settings.mode == 0
+        ? JPH::ESpringMode::FrequencyAndDamping
+        : JPH::ESpringMode::StiffnessAndDamping;
+    result.mFrequency = settings.frequencyOrStiffness;
+    result.mDamping = settings.damping;
+    return result;
+}
+
+inline JPH::MotorSettings ToMotorSettings(const JPH_MotorSettings& settings)
+{
+    JPH::MotorSettings result;
+    result.mSpringSettings = ToSpringSettings(settings.springSettings);
+    result.mMinForceLimit = settings.minForceLimit;
+    result.mMaxForceLimit = settings.maxForceLimit;
+    result.mMinTorqueLimit = settings.minTorqueLimit;
+    result.mMaxTorqueLimit = settings.maxTorqueLimit;
+    return result;
+}
+
+inline JPH::EMotorState ToMotorState(int32_t state)
+{
+    if (state == 1) return JPH::EMotorState::Velocity;
+    if (state == 2) return JPH::EMotorState::Position;
+    return JPH::EMotorState::Off;
+}
+}
+
+void JPH_PhysicsSystem_AddConstraint(JPH_PhysicsSystemRef system, JPH_ConstraintRef constraint)
+{
+    if (system != nullptr && constraint != nullptr)
+        ToPhysicsSystem(system)->AddConstraint(ToConstraint(constraint));
+}
+
+void JPH_PhysicsSystem_RemoveConstraint(JPH_PhysicsSystemRef system, JPH_ConstraintRef constraint)
+{
+    if (system != nullptr && constraint != nullptr)
+        ToPhysicsSystem(system)->RemoveConstraint(ToConstraint(constraint));
+}
+
+void JPH_FixedConstraintSettings_Init(JPH_FixedConstraintSettings* settings)
+{
+    if (settings == nullptr) return;
+    std::memset(settings, 0, sizeof(*settings));
+    settings->base.enabled = 1;
+    settings->space = 1;
+    settings->axisX1 = settings->axisX2 = JPH_Vec3{1, 0, 0};
+    settings->axisY1 = settings->axisY2 = JPH_Vec3{0, 1, 0};
+}
+
+JPH_ConstraintRef JPH_FixedConstraint_Create(
+    const JPH_FixedConstraintSettings* settings, JPH_BodyRef body1, JPH_BodyRef body2)
+{
+    if (settings == nullptr || body1 == nullptr || body2 == nullptr) return nullptr;
+    JPH::FixedConstraintSettings converted;
+    converted.mSpace = ToConstraintSpace(settings->space);
+    converted.mAutoDetectPoint = settings->autoDetectPoint != 0;
+    converted.mPoint1 = ToJPH(settings->point1);
+    converted.mAxisX1 = ToJPH(settings->axisX1);
+    converted.mAxisY1 = ToJPH(settings->axisY1);
+    converted.mPoint2 = ToJPH(settings->point2);
+    converted.mAxisX2 = ToJPH(settings->axisX2);
+    converted.mAxisY2 = ToJPH(settings->axisY2);
+    return converted.Create(*ToBody(body1), *ToBody(body2));
+}
+
+void JPH_DistanceConstraintSettings_Init(JPH_DistanceConstraintSettings* settings)
+{
+    if (settings == nullptr) return;
+    std::memset(settings, 0, sizeof(*settings));
+    settings->base.enabled = 1;
+    settings->space = 1;
+    settings->minDistance = -1.0f;
+    settings->maxDistance = -1.0f;
+}
+
+JPH_ConstraintRef JPH_DistanceConstraint_Create(
+    const JPH_DistanceConstraintSettings* settings, JPH_BodyRef body1, JPH_BodyRef body2)
+{
+    if (settings == nullptr || body1 == nullptr || body2 == nullptr) return nullptr;
+    JPH::DistanceConstraintSettings converted;
+    converted.mSpace = ToConstraintSpace(settings->space);
+    converted.mPoint1 = ToJPH(settings->point1);
+    converted.mPoint2 = ToJPH(settings->point2);
+    converted.mMinDistance = settings->minDistance;
+    converted.mMaxDistance = settings->maxDistance;
+    converted.mLimitsSpringSettings = ToSpringSettings(settings->limitsSpringSettings);
+    return converted.Create(*ToBody(body1), *ToBody(body2));
+}
+
+void JPH_DistanceConstraint_SetDistance(JPH_ConstraintRef constraint, float minDistance, float maxDistance)
+{
+    if (constraint != nullptr)
+        static_cast<JPH::DistanceConstraint*>(ToConstraint(constraint))->SetDistance(minDistance, maxDistance);
+}
+
+void JPH_DistanceConstraint_SetLimitsSpringSettings(
+    JPH_ConstraintRef constraint, const JPH_SpringSettings* settings)
+{
+    if (constraint != nullptr && settings != nullptr)
+        static_cast<JPH::DistanceConstraint*>(ToConstraint(constraint))->SetLimitsSpringSettings(ToSpringSettings(*settings));
+}
+
+void JPH_HingeConstraintSettings_Init(JPH_HingeConstraintSettings* settings)
+{
+    if (settings == nullptr) return;
+    std::memset(settings, 0, sizeof(*settings));
+    settings->base.enabled = 1;
+    settings->space = 1;
+    settings->hingeAxis1 = settings->hingeAxis2 = JPH_Vec3{0, 1, 0};
+    settings->normalAxis1 = settings->normalAxis2 = JPH_Vec3{1, 0, 0};
+    settings->limitsMin = -JPH::JPH_PI;
+    settings->limitsMax = JPH::JPH_PI;
+}
+
+JPH_ConstraintRef JPH_HingeConstraint_Create(
+    const JPH_HingeConstraintSettings* settings, JPH_BodyRef body1, JPH_BodyRef body2)
+{
+    if (settings == nullptr || body1 == nullptr || body2 == nullptr) return nullptr;
+    JPH::HingeConstraintSettings converted;
+    converted.mSpace = ToConstraintSpace(settings->space);
+    converted.mPoint1 = ToJPH(settings->point1);
+    converted.mHingeAxis1 = ToJPH(settings->hingeAxis1);
+    converted.mNormalAxis1 = ToJPH(settings->normalAxis1);
+    converted.mPoint2 = ToJPH(settings->point2);
+    converted.mHingeAxis2 = ToJPH(settings->hingeAxis2);
+    converted.mNormalAxis2 = ToJPH(settings->normalAxis2);
+    converted.mLimitsMin = settings->limitsMin;
+    converted.mLimitsMax = settings->limitsMax;
+    converted.mLimitsSpringSettings = ToSpringSettings(settings->limitsSpringSettings);
+    converted.mMaxFrictionTorque = settings->maxFrictionTorque;
+    converted.mMotorSettings = ToMotorSettings(settings->motorSettings);
+    return converted.Create(*ToBody(body1), *ToBody(body2));
+}
+
+void JPH_HingeConstraint_SetMotorState(JPH_ConstraintRef constraint, int32_t state)
+{
+    if (constraint != nullptr) static_cast<JPH::HingeConstraint*>(ToConstraint(constraint))->SetMotorState(ToMotorState(state));
+}
+void JPH_HingeConstraint_SetTargetAngularVelocity(JPH_ConstraintRef constraint, float velocity)
+{
+    if (constraint != nullptr) static_cast<JPH::HingeConstraint*>(ToConstraint(constraint))->SetTargetAngularVelocity(velocity);
+}
+void JPH_HingeConstraint_SetTargetAngle(JPH_ConstraintRef constraint, float angle)
+{
+    if (constraint != nullptr) static_cast<JPH::HingeConstraint*>(ToConstraint(constraint))->SetTargetAngle(angle);
+}
+float JPH_HingeConstraint_GetCurrentAngle(JPH_ConstraintRef constraint)
+{
+    return constraint != nullptr ? static_cast<JPH::HingeConstraint*>(ToConstraint(constraint))->GetCurrentAngle() : 0.0f;
+}
+void JPH_HingeConstraint_SetLimits(JPH_ConstraintRef constraint, float minAngle, float maxAngle)
+{
+    if (constraint != nullptr) static_cast<JPH::HingeConstraint*>(ToConstraint(constraint))->SetLimits(minAngle, maxAngle);
+}
+void JPH_HingeConstraint_SetMotorSettings(JPH_ConstraintRef constraint, const JPH_MotorSettings* settings)
+{
+    if (constraint != nullptr && settings != nullptr)
+        static_cast<JPH::HingeConstraint*>(ToConstraint(constraint))->GetMotorSettings() = ToMotorSettings(*settings);
+}
+
+void JPH_SliderConstraintSettings_Init(JPH_SliderConstraintSettings* settings)
+{
+    if (settings == nullptr) return;
+    std::memset(settings, 0, sizeof(*settings));
+    settings->base.enabled = 1;
+    settings->space = 1;
+    settings->sliderAxis1 = settings->sliderAxis2 = JPH_Vec3{1, 0, 0};
+    settings->normalAxis1 = settings->normalAxis2 = JPH_Vec3{0, 1, 0};
+    settings->limitsMin = -FLT_MAX;
+    settings->limitsMax = FLT_MAX;
+}
+
+JPH_ConstraintRef JPH_SliderConstraint_Create(
+    const JPH_SliderConstraintSettings* settings, JPH_BodyRef body1, JPH_BodyRef body2)
+{
+    if (settings == nullptr || body1 == nullptr || body2 == nullptr) return nullptr;
+    JPH::SliderConstraintSettings converted;
+    converted.mSpace = ToConstraintSpace(settings->space);
+    converted.mAutoDetectPoint = settings->autoDetectPoint != 0;
+    converted.mPoint1 = ToJPH(settings->point1);
+    converted.mSliderAxis1 = ToJPH(settings->sliderAxis1);
+    converted.mNormalAxis1 = ToJPH(settings->normalAxis1);
+    converted.mPoint2 = ToJPH(settings->point2);
+    converted.mSliderAxis2 = ToJPH(settings->sliderAxis2);
+    converted.mNormalAxis2 = ToJPH(settings->normalAxis2);
+    converted.mLimitsMin = settings->limitsMin;
+    converted.mLimitsMax = settings->limitsMax;
+    converted.mLimitsSpringSettings = ToSpringSettings(settings->limitsSpringSettings);
+    converted.mMaxFrictionForce = settings->maxFrictionForce;
+    converted.mMotorSettings = ToMotorSettings(settings->motorSettings);
+    return converted.Create(*ToBody(body1), *ToBody(body2));
+}
+
+void JPH_SliderConstraint_SetLimits(JPH_ConstraintRef constraint, float minDistance, float maxDistance)
+{
+    if (constraint != nullptr) static_cast<JPH::SliderConstraint*>(ToConstraint(constraint))->SetLimits(minDistance, maxDistance);
+}
+void JPH_SliderConstraint_SetMotorSettings(JPH_ConstraintRef constraint, const JPH_MotorSettings* settings)
+{
+    if (constraint != nullptr && settings != nullptr)
+        static_cast<JPH::SliderConstraint*>(ToConstraint(constraint))->GetMotorSettings() = ToMotorSettings(*settings);
+}
+void JPH_SliderConstraint_SetMotorState(JPH_ConstraintRef constraint, int32_t state)
+{
+    if (constraint != nullptr) static_cast<JPH::SliderConstraint*>(ToConstraint(constraint))->SetMotorState(ToMotorState(state));
+}
+void JPH_SliderConstraint_SetTargetVelocity(JPH_ConstraintRef constraint, float velocity)
+{
+    if (constraint != nullptr) static_cast<JPH::SliderConstraint*>(ToConstraint(constraint))->SetTargetVelocity(velocity);
+}
+void JPH_SliderConstraint_SetTargetPosition(JPH_ConstraintRef constraint, float position)
+{
+    if (constraint != nullptr) static_cast<JPH::SliderConstraint*>(ToConstraint(constraint))->SetTargetPosition(position);
+}
+float JPH_SliderConstraint_GetCurrentPosition(JPH_ConstraintRef constraint)
+{
+    return constraint != nullptr ? static_cast<JPH::SliderConstraint*>(ToConstraint(constraint))->GetCurrentPosition() : 0.0f;
+}
+
+void JPH_SixDOFConstraintSettings_Init(JPH_SixDOFConstraintSettings* settings)
+{
+    if (settings == nullptr) return;
+    std::memset(settings, 0, sizeof(*settings));
+    settings->base.enabled = 1;
+    settings->space = 1;
+    settings->axisX1 = settings->axisX2 = JPH_Vec3{1, 0, 0};
+    settings->axisY1 = settings->axisY2 = JPH_Vec3{0, 1, 0};
+    for (uint32_t axis = 0; axis < 6; ++axis)
+    {
+        settings->limitMin[axis] = -FLT_MAX;
+        settings->limitMax[axis] = FLT_MAX;
+    }
+}
+
+void JPH_SixDOFConstraintSettings_MakeFixedAxis(JPH_SixDOFConstraintSettings* settings, uint32_t axis)
+{
+    if (settings != nullptr && axis < 6) { settings->limitMin[axis] = FLT_MAX; settings->limitMax[axis] = -FLT_MAX; }
+}
+void JPH_SixDOFConstraintSettings_MakeFreeAxis(JPH_SixDOFConstraintSettings* settings, uint32_t axis)
+{
+    if (settings != nullptr && axis < 6) { settings->limitMin[axis] = -FLT_MAX; settings->limitMax[axis] = FLT_MAX; }
+}
+void JPH_SixDOFConstraintSettings_SetLimitedAxis(
+    JPH_SixDOFConstraintSettings* settings, uint32_t axis, float minValue, float maxValue)
+{
+    if (settings != nullptr && axis < 6) { settings->limitMin[axis] = minValue; settings->limitMax[axis] = maxValue; }
+}
+void JPH_SixDOFConstraintSettings_SetLimitsSpringSettings(
+    JPH_SixDOFConstraintSettings* settings, uint32_t axis, const JPH_SpringSettings* spring)
+{
+    if (settings != nullptr && spring != nullptr && axis < 3) settings->limitsSpringSettings[axis] = *spring;
+}
+
+JPH_ConstraintRef JPH_SixDOFConstraint_Create(
+    const JPH_SixDOFConstraintSettings* settings, JPH_BodyRef body1, JPH_BodyRef body2)
+{
+    if (settings == nullptr || body1 == nullptr || body2 == nullptr) return nullptr;
+    JPH::SixDOFConstraintSettings converted;
+    converted.mSpace = ToConstraintSpace(settings->space);
+    converted.mPosition1 = ToJPH(settings->position1);
+    converted.mAxisX1 = ToJPH(settings->axisX1);
+    converted.mAxisY1 = ToJPH(settings->axisY1);
+    converted.mPosition2 = ToJPH(settings->position2);
+    converted.mAxisX2 = ToJPH(settings->axisX2);
+    converted.mAxisY2 = ToJPH(settings->axisY2);
+    converted.mSwingType = settings->swingType == 0 ? JPH::ESwingType::Cone : JPH::ESwingType::Pyramid;
+    for (uint32_t axis = 0; axis < 6; ++axis)
+    {
+        converted.mMaxFriction[axis] = settings->maxFriction[axis];
+        converted.mLimitMin[axis] = settings->limitMin[axis];
+        converted.mLimitMax[axis] = settings->limitMax[axis];
+        converted.mMotorSettings[axis] = ToMotorSettings(settings->motorSettings[axis]);
+        if (axis < 3) converted.mLimitsSpringSettings[axis] = ToSpringSettings(settings->limitsSpringSettings[axis]);
+    }
+    return converted.Create(*ToBody(body1), *ToBody(body2));
 }

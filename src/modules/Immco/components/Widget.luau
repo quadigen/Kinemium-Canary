@@ -74,6 +74,10 @@ return function(params: typedefs.WidgetParams, dt: number)
 			Color = theme.SecondaryColor,
 
 			title = params.title,
+			tabs = params.tabs,
+			activeTab = params.activeTab,
+			OnTabChanged = params.OnTabChanged,
+			renderer = params.renderer,
 			theme = theme,
 		}, dt)
 	end

@@ -30,6 +30,42 @@ export type Fns = {
 	Kine_Skia_Surface_ClearBackdrop: (surface: FFIPointer) -> (),
 
 	Kine_Skia_Surface_Clear: (surface: FFIPointer, r: number, g: number, b: number, a: number) -> (),
+	Kine_Skia_RuntimeShader_Create: (sksl: cstring) -> FFIPointer,
+	Kine_Skia_RuntimeShader_Destroy: (shader: FFIPointer) -> (),
+	Kine_Skia_RuntimeShader_SetUniform: (
+		shader: FFIPointer,
+		name: cstring,
+		values: FFIPointer,
+		valueCount: int
+	) -> number,
+	Kine_Skia_Surface_DrawRuntimeShaderRect: (
+		surface: FFIPointer,
+		shader: FFIPointer,
+		x: float,
+		y: float,
+		width: float,
+		height: float
+	) -> (),
+	Kine_Skia_RuntimeShader_GetLastError: () -> FFIPointer,
+
+	Kine_Skia_Surface_DrawTextShadow: (
+		surface: FFIPointer,
+		text: cstring,
+		x: float,
+		y: float,
+		fontSize: float,
+		fontPath: cstring,
+
+		offsetX: float,
+		offsetY: float,
+		blurSigma: float,
+		spread: float,
+
+		r: number,
+		g: number,
+		b: number,
+		a: number
+	) -> (),
 
 	Kine_Skia_Surface_DrawRect: (
 		surface: FFIPointer,
@@ -37,6 +73,19 @@ export type Fns = {
 		y: float,
 		width: float,
 		height: float,
+		r: number,
+		g: number,
+		b: number,
+		a: number,
+		strokeWidth: float
+	) -> (),
+	Kine_Skia_Surface_DrawRotatedRect: (
+		surface: FFIPointer,
+		centerX: float,
+		centerY: float,
+		width: float,
+		height: float,
+		rotationDegrees: float,
 		r: number,
 		g: number,
 		b: number,
@@ -352,7 +401,7 @@ local funcs = {
 	},
 
 	Kine_Skia_Surface_GetRowBytes = {
-		returns = ffi.types.u64,
+		returns = ffi.types.u32,
 		args = {
 			ffi.types.pointer,
 		},
@@ -399,6 +448,38 @@ local funcs = {
 		},
 	},
 
+	Kine_Skia_RuntimeShader_Create = {
+		returns = ffi.types.pointer,
+		args = { ffi.types.pointer },
+	},
+
+	Kine_Skia_RuntimeShader_Destroy = {
+		returns = ffi.types.void,
+		args = { ffi.types.pointer },
+	},
+
+	Kine_Skia_RuntimeShader_SetUniform = {
+		returns = ffi.types.u8,
+		args = { ffi.types.pointer, ffi.types.pointer, ffi.types.pointer, ffi.types.i32 },
+	},
+
+	Kine_Skia_Surface_DrawRuntimeShaderRect = {
+		returns = ffi.types.void,
+		args = {
+			ffi.types.pointer,
+			ffi.types.pointer,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+		},
+	},
+
+	Kine_Skia_RuntimeShader_GetLastError = {
+		returns = ffi.types.pointer,
+		args = {},
+	},
+
 	Kine_Skia_Surface_DrawRect = {
 		returns = ffi.types.void,
 		args = {
@@ -408,6 +489,22 @@ local funcs = {
 			ffi.types.float,
 			ffi.types.float,
 			ffi.types.u8,
+			ffi.types.u8,
+			ffi.types.u8,
+			ffi.types.u8,
+			ffi.types.float,
+		},
+	},
+
+	Kine_Skia_Surface_DrawRotatedRect = {
+		returns = ffi.types.void,
+		args = {
+			ffi.types.pointer,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
+			ffi.types.float,
 			ffi.types.u8,
 			ffi.types.u8,
 			ffi.types.u8,
@@ -491,6 +588,31 @@ local funcs = {
 			ffi.types.u8,
 			ffi.types.u8,
 			ffi.types.u8,
+		},
+	},
+
+	Kine_Skia_Surface_DrawTextShadow = {
+		returns = ffi.types.void,
+		args = {
+			ffi.types.pointer, -- surface
+			ffi.types.pointer, -- text
+
+			ffi.types.float, -- x
+			ffi.types.float, -- y
+			ffi.types.float, -- fontSize
+
+			ffi.types.pointer, -- fontPath
+
+			ffi.types.float, -- offsetX
+			ffi.types.float, -- offsetY
+
+			ffi.types.float, -- blurSigma
+			ffi.types.float, -- spread
+
+			ffi.types.u8, -- r
+			ffi.types.u8, -- g
+			ffi.types.u8, -- b
+			ffi.types.u8, -- a
 		},
 	},
 

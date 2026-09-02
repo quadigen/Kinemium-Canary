@@ -291,7 +291,7 @@ end
 local function updateFirstPerson(instance, state, subjectPosition, window)
 	updateLookInput(instance, state, window, true)
 	local position = subjectPosition + (instance.FirstPersonOffset or Vector3.new(0, 0, 0))
-	local rotation = CFrame.fromEulerAnglesYXZ(state.yaw, state.pitch, math.rad(tonumber(instance.Roll) or 0)).Rotation
+	local rotation = CFrame.fromEulerAnglesYXZ(state.yaw, -state.pitch, math.rad(tonumber(instance.Roll) or 0)).Rotation
 	local cframe = CFrame.new(position):WithRotation(rotation)
 	writeCamera(instance, state, cframe, position + cframe:GetLookVector())
 end

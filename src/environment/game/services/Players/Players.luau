@@ -8,6 +8,7 @@ local Enum = require("@EnumMap")
 local Color3 = require("@Color3")
 local CFrame = require("@CFrame")
 local HumanoidClass = require("@Humanoid")
+local StarterCharacterResolver = require("@StarterCharacterResolver")
 
 local Players = Instance.new("Players")
 local runtimeRenderer = nil
@@ -30,6 +31,9 @@ if not IsServer then
 end
 
 Players.InitRenderer = function(renderer, signal, game)
+	runtimeRenderer = renderer
+	runtimeGame = game
+
 	local function newObject(className, datamodel)
 		local ok, created = pcall(Registry.new, className, renderer, game)
 		if ok and created then
@@ -52,6 +56,25 @@ Players.InitRenderer = function(renderer, signal, game)
 
 		return player
 	end
+
+	local function addToRegistry(player)
+		if player and player.ClassName == "Player" and not table.find(playerRegistry, player) then
+			table.insert(playerRegistry, player)
+		end
+		return player
+	end
+
+	local function removeFromRegistry(player)
+		local index = table.find(playerRegistry, player)
+		if index then
+			table.remove(playerRegistry, index)
+			return true
+		end
+		return false
+	end
+
+	Players.ChildAdded:Connect(addToRegistry)
+	Players.ChildRemoved:Connect(removeFromRegistry)
 
 	local function ensureHumanoid(humanoid, datamodel)
 		if humanoid and humanoid.ClassName == "Humanoid" and humanoid.CreateDefaultRig then
@@ -94,6 +117,10 @@ Players.InitRenderer = function(renderer, signal, game)
 			print(`[Players] LoadCharacter ignored on client for {player.Name}`)
 			return
 		end
+		local characterService = datamodel and datamodel:GetService("Character")
+		if characterService and characterService.LoadPlayer then
+			return characterService:LoadPlayer(player, datamodel)
+		end
 
 		local SpawnCFrame = CFrame.new(0, 50, 0)
 		for _, part in pairs(datamodel.Workspace:GetChildren()) do
@@ -103,7 +130,7 @@ Players.InitRenderer = function(renderer, signal, game)
 			end
 		end
 
-		local starterCharacter = datamodel.StarterPlayer.StarterCharacter
+		local starterCharacter = StarterCharacterResolver.Resolve(datamodel)
 		local CharacterModel
 
 		if starterCharacter then
@@ -146,9 +173,7 @@ Players.InitRenderer = function(renderer, signal, game)
 			humanoid:CreateDefaultRig({
 				Character = CharacterModel,
 				SpawnCFrame = SpawnCFrame,
-				ShirtColor = Color3.fromRGB(math.random(0, 255), math.random(0, 255), math.random(0, 255)),
-				PantsColor = Color3.fromRGB(math.random(0, 255), math.random(0, 255), math.random(0, 255)),
-				HeadColor = Color3.fromRGB(255, 204, 153),
+				BodyColor = Color3.fromRGB(244, 205, 20),
 				RootColor = Color3.new(0, 0, 0),
 			})
 			CharacterModel.PrimaryPart = humanoid.RootPart
@@ -166,7 +191,7 @@ Players.InitRenderer = function(renderer, signal, game)
 			return
 		end
 		local player = CreatePlayer(name, userId)
-		table.insert(playerRegistry, player)
+		addToRegistry(player)
 
 		if IsServer and not (options and options.noCharacter) then
 			self:LoadCharacter(player, datamodel)
@@ -177,22 +202,31 @@ Players.InitRenderer = function(renderer, signal, game)
 	end
 
 	function Players:RemovePlayer(player)
-		for i, p in ipairs(playerRegistry) do
-			if p == player then
-				table.remove(playerRegistry, i)
-				print(`[Players] Removed player {player.Name} (UserId: {player.UserId}) from registry`)
-				break
-			end
+		local characterService = runtimeGame and runtimeGame:GetService("Character")
+		if characterService and characterService.UnloadPlayer then
+			characterService:UnloadPlayer(player)
 		end
+		removeFromRegistry(player)
+		print(`[Players] Removed player {player.Name} (UserId: {player.UserId}) from registry`)
 		self.PlayerRemoving:Fire(player)
+		if player.Parent == self then
+			player:Destroy()
+		end
 	end
 
 	function Players:RemovePlayerByUserId(userId)
-		for i, p in ipairs(playerRegistry) do
+		for _, p in ipairs(table.clone(playerRegistry)) do
 			if p.UserId == userId then
-				table.remove(playerRegistry, i)
+				local characterService = runtimeGame and runtimeGame:GetService("Character")
+				if characterService and characterService.UnloadPlayer then
+					characterService:UnloadPlayer(p)
+				end
+				removeFromRegistry(p)
 				print(`[Players] Removed player {p.Name} (UserId: {userId}) from registry by UserId`)
 				self.PlayerRemoving:Fire(p)
+				if p.Parent == self then
+					p:Destroy()
+				end
 				return true
 			end
 		end
@@ -251,7 +285,7 @@ Players.InitRenderer = function(renderer, signal, game)
 
 	if Players.SetupClient == true then
 		local name = GetFlagValue("username") or "Player"
-		Players.LocalPlayer = CreatePlayer(name, 1)
+		Players.LocalPlayer = addToRegistry(CreatePlayer(name, 1))
 
 		Players.LocalPlayer:SetProperties({
 			GetMouse = function(self)

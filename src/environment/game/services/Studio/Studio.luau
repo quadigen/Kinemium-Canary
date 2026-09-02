@@ -191,17 +191,18 @@ Studio.InitRenderer = function(renderer, renderer_signal, datamodel)
 			TabWidth = 4,
 			TextWrapping = false,
 
-			Theme = nil,
+			Theme = ThemeObj,
 			UITheme = nil,
 
 			UseBoundingBoxMoveHandles = true,
 			UseDefaultExternalEditor = false,
 		})
 
-		local ThemeChanged = signal.new()
-		Studio.ThemeChanged = ThemeChanged
+		Studio.ThemeChanged = StudioThemeService.ThemeChanged or signal.new()
 
-		Studio.Theme = ThemeObj
+		function Studio:GetAvailableThemes()
+			return { Studio.Theme }
+		end
 	end)
 end
 

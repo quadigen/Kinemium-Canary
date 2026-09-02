@@ -190,6 +190,7 @@ renderer.Pool.new("2d", function()
 		title = "Explorer",
 		theme = theme,
 		engine_window = renderer.Window,
+		renderer = renderer,
 
 		callback = function(params)
 			Immco.Scroller({
@@ -213,6 +214,23 @@ renderer.Pool.new("2d", function()
 				RetainedStorage = retainedStorage,
 				callback = function(params)
 					local rowHeightStep = rowHeight
+					local viewportRect = {
+						x = params.viewportX,
+						y = params.viewportY,
+						width = params.viewportWidth,
+						height = params.viewportHeight,
+					}
+
+					local function clipHitboxToViewport(rect)
+						local left = math.max(rect.x, viewportRect.x)
+						local top = math.max(rect.y, viewportRect.y)
+						local right = math.min(rect.x + rect.width, viewportRect.x + viewportRect.width)
+						local bottom = math.min(rect.y + rect.height, viewportRect.y + viewportRect.height)
+						if right <= left or bottom <= top then
+							return nil
+						end
+						return { x = left, y = top, width = right - left, height = bottom - top }
+					end
 
 					Immco.TextInput({
 						x = params.x + 6,
@@ -224,10 +242,10 @@ renderer.Pool.new("2d", function()
 						renderer = renderer,
 						theme = theme,
 
-						Color = { R = 0.15, G = 0.15, B = 0.15, A = 1 },
-						FocusColor = { R = 0.2, G = 0.2, B = 0.25, A = 1 },
-						TextColor = { R = 1, G = 1, B = 1, A = 1 },
-						PlaceholderColor = { R = 0.5, G = 0.5, B = 0.5, A = 1 },
+						Color = theme.InputColor,
+						FocusColor = theme.InputFocusColor,
+						TextColor = theme.InputTextColor,
+						PlaceholderColor = theme.InputPlaceholderColor,
 
 						ReadOnly = not canInteract,
 
@@ -314,7 +332,7 @@ renderer.Pool.new("2d", function()
 						walkVisible(service, 0, state, function(instance, depth, rowY, idx)
 							table.insert(stripeRects, {
 								y = rowY,
-								color = (idx % 2 == 0) and Argon:RGBA(50, 50, 50) or Argon:RGBA(45, 45, 45),
+								color = (idx % 2 == 0) and theme.AlternatingColor1 or theme.AlternatingColor2,
 							})
 						end)
 					end
@@ -374,12 +392,14 @@ renderer.Pool.new("2d", function()
 						local isSelected = selection and selection[1] == instance or false
 						local textX = indent + (36 * uiScale)
 
-						local isInRect = renderer:isMouseInRect({
+						local rowRect = {
 							x = params.x + (6 * uiScale),
 							y = rowY - (18 * uiScale),
 							width = params.width - (12 * uiScale),
 							height = rowHeight,
-						})
+						}
+						local rowHitbox = clipHitboxToViewport(rowRect)
+						local isInRect = rowHitbox and renderer:isMouseInRect(rowHitbox) or false
 						if isInRect and canInteract then
 							local x = params.x + (6 * uiScale)
 							local y = rowY - (18 * uiScale)
@@ -431,7 +451,8 @@ renderer.Pool.new("2d", function()
 								engine_window = renderer.Window,
 							}, dt)
 
-							if renderer:HasClicked(plusRect) and canInteract then
+							local plusHitbox = clipHitboxToViewport(plusRect)
+							if plusHitbox and renderer:HasClicked(plusHitbox) and canInteract then
 								Selection.Set({ instance })
 								createMenu.visible = true
 								createMenu.x = plusRect.x + plusRect.width + (4 * uiScale)
@@ -491,14 +512,7 @@ renderer.Pool.new("2d", function()
 							Argon:Restore(renderer.Window)
 						end
 
-						local rowRect = {
-							x = params.x + (6 * uiScale),
-							y = rowY - (18 * uiScale),
-							width = params.width - (12 * uiScale),
-							height = rowHeight,
-						}
-
-						if renderer:HasClicked(rowRect) and canInteract then
+						if rowHitbox and renderer:HasClicked(rowHitbox) and canInteract then
 							if clickedInstance(instance) then
 								-- Double click
 								if instance:IsA("ScriptContainer") then
@@ -530,14 +544,13 @@ renderer.Pool.new("2d", function()
 								engine_window = renderer.Window,
 							}, dt)
 
-							if
-								renderer:HasClicked({
-									x = indent,
-									y = rowY - (14 * uiScale),
-									width = imageSize,
-									height = imageSize,
-								}) and canInteract
-							then
+							local arrowHitbox = clipHitboxToViewport({
+								x = indent,
+								y = rowY - (14 * uiScale),
+								width = imageSize,
+								height = imageSize,
+							})
+							if arrowHitbox and renderer:HasClicked(arrowHitbox) and canInteract then
 								expanded[instance] = not expanded[instance]
 							end
 						end

@@ -15,5 +15,10 @@ lib.Tooltip = require("./Immco/components/Tooltip")
 lib.ColorPicker = require("./Immco/components/ColorPicker")
 lib.Table = require("./Immco/components/Table")
 lib.ContextMenu = require("./Immco/components/ContextMenu")
+lib.TopbarButton = require("./Immco/components/TopbarButton")
+lib.Breadcrumb = require("./Immco/components/Breadcrumb")
+lib.ButtonGroup = require("./Immco/components/ButtonGroup")
+lib.Tabs = require("./Immco/components/Tabs")
+lib.Kbd = require("./Immco/components/Kbd")
 
 return lib

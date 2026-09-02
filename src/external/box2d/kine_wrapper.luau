@@ -1,0 +1,12 @@
+local ffi=zune.ffi
+local zembed=require("@zembed")
+local name="KinemiumLibs."..ffi.suffix
+local path=if zembed.IsEmbedded() then zembed.RuntimePath(name) else "./vendor/"..name
+return ffi.dlopen(path,{
+	Kine_Box2D_CreateWorld={returns=ffi.types.pointer,args={ffi.types.float,ffi.types.float}},Kine_Box2D_DestroyWorld={returns=ffi.types.void,args={ffi.types.pointer}},Kine_Box2D_SetGravity={returns=ffi.types.void,args={ffi.types.pointer,ffi.types.float,ffi.types.float}},Kine_Box2D_Step={returns=ffi.types.void,args={ffi.types.pointer,ffi.types.float,ffi.types.i32}},Kine_Box2D_StepWithGravity={returns=ffi.types.void,args={ffi.types.pointer,ffi.types.float,ffi.types.i32,ffi.types.float,ffi.types.float}},
+	Kine_Box2D_CreateBoxBody={returns=ffi.types.pointer,args={ffi.types.pointer,ffi.types.float,ffi.types.float,ffi.types.float,ffi.types.float,ffi.types.float,ffi.types.i32,ffi.types.float,ffi.types.float,ffi.types.float,ffi.types.i32}},Kine_Box2D_DestroyBody={returns=ffi.types.void,args={ffi.types.pointer}},Kine_Box2D_SetBodyTransform={returns=ffi.types.void,args={ffi.types.pointer,ffi.types.float,ffi.types.float,ffi.types.float}},Kine_Box2D_GetBodyTransform={returns=ffi.types.void,args={ffi.types.pointer,ffi.types.pointer,ffi.types.pointer,ffi.types.pointer}},Kine_Box2D_SetBodyType={returns=ffi.types.void,args={ffi.types.pointer,ffi.types.i32}},Kine_Box2D_SetBodyVelocity={returns=ffi.types.void,args={ffi.types.pointer,ffi.types.float,ffi.types.float,ffi.types.float}},
+	Kine_Box2D_CreateDistanceJoint={returns=ffi.types.pointer,args={ffi.types.pointer,ffi.types.pointer,ffi.types.pointer,ffi.types.float,ffi.types.float,ffi.types.float,ffi.types.float,ffi.types.float,ffi.types.i32,ffi.types.float,ffi.types.float,ffi.types.i32,ffi.types.float,ffi.types.float,ffi.types.i32}},
+	Kine_Box2D_CreateHingeJoint={returns=ffi.types.pointer,args={ffi.types.pointer,ffi.types.pointer,ffi.types.pointer,ffi.types.float,ffi.types.float,ffi.types.float,ffi.types.float,ffi.types.float,ffi.types.float,ffi.types.i32,ffi.types.float,ffi.types.float,ffi.types.i32,ffi.types.float,ffi.types.float,ffi.types.i32}},
+	Kine_Box2D_CreateWeldJoint={returns=ffi.types.pointer,args={ffi.types.pointer,ffi.types.pointer,ffi.types.pointer,ffi.types.float,ffi.types.float,ffi.types.float,ffi.types.float,ffi.types.float,ffi.types.float,ffi.types.float,ffi.types.float,ffi.types.float,ffi.types.float,ffi.types.i32,ffi.types.i32}},
+	Kine_Box2D_DestroyJoint={returns=ffi.types.void,args={ffi.types.pointer}},
+})

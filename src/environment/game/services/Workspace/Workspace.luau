@@ -2,7 +2,7 @@ local Instance = require("@Instance")
 local Workspace = Instance.new("Workspace")
 local Enum = require("@EnumMap")
 local CFrame = require("@CFrame")
-local argon = require("@argon")
+local argon = require("@Argon")
 local zembed = require("@zembed")
 local Vector3 = require("@Vector3")
 
@@ -24,7 +24,21 @@ Workspace.InitRenderer = function(renderer, signal, game)
 		PhysicsEngine = Enum.PhysicsEngine.Default,
 		Gravity = -9.81,
 		GlobalWind = Vector3.new(0, 0, 0),
+		CurrentCamera2D = nil,
 	})
+
+	function Workspace:Raycast(origin, direction, params)
+		local physicsService = game:GetService("UnifiedPhysicsService")
+		if not physicsService or not physicsService.Raycast then
+			return nil
+		end
+		return physicsService.Raycast(origin, direction, params)
+	end
+
+	if IsHeadless == true then
+		Workspace.MeshesPreset = {}
+		return Workspace
+	end
 
 	local meshes = {
 		cube = argon:CreateMesh(renderer.Window, "cube"),
@@ -130,6 +144,9 @@ Workspace.InitRenderer = function(renderer, signal, game)
 		CastShadow = true,
 		Material = true,
 		Shape = true,
+		MeshObject = true,
+		_mesh = true,
+		MeshScale = true,
 	}
 	local transformProperties = {
 		CFrame = true,
@@ -204,10 +221,30 @@ Workspace.InitRenderer = function(renderer, signal, game)
 		end
 	end)
 
+	local function getRenderableMesh(object, props, material)
+		if props.ClassName == "MeshPart" then
+			local mesh = props._mesh
+				or (props.MeshObject and (props.MeshObject._mesh or props.MeshObject._meshgenHandle))
+			if mesh and mesh._handle then
+				return mesh
+			end
+		end
+		return getMeshForShape(props.Shape, material)
+	end
+
+	local function getRenderScale(props)
+		local size = props.Size
+		local meshScale = tonumber(props.MeshScale) or 1
+		if props.ClassName == "MeshPart" and meshScale ~= 1 then
+			return Vector3.new(size.X * meshScale, size.Y * meshScale, size.Z * meshScale)
+		end
+		return size
+	end
+
 	local function updateDrawCallTransform(drawCall, props)
 		drawCall.matrix = nil
 		drawCall.cframe = props.CFrame
-		drawCall.scale = props.Size
+		drawCall.scale = getRenderScale(props)
 	end
 
 	local function destroyDynamicGroups()
@@ -220,15 +257,13 @@ Workspace.InitRenderer = function(renderer, signal, game)
 		table.clear(dynamicPartState)
 	end
 
-	local function fillDrawCall(drawCall, props)
+	local function fillDrawCall(drawCall, object, props)
 		local size = props.Size
 		local material = props.Material
 		local isGlass = material == Enum.Material.Glass
 		drawCall.texture = materialTextures[material]
 		drawCall.MaterialKind = getMaterialKind(material)
 		if isGlass then
-			-- Glass uses these shared draw fields as its optical parameters:
-			-- roughness, IOR, volume thickness, and transmission respectively.
 			drawCall.roughness = math.clamp((props.Roughness or 0.5) * 0.2, 0.02, 0.18)
 			drawCall.metallic = 1.52
 			drawCall.MaterialTileScale = math.max(0.05, math.min(size.X, size.Y, size.Z) * 0.5)
@@ -239,7 +274,7 @@ Workspace.InitRenderer = function(renderer, signal, game)
 			drawCall.roughness = props.Roughness
 			drawCall.transmission = 0
 		end
-		drawCall.mesh = getMeshForShape(props.Shape, material)
+		drawCall.mesh = getRenderableMesh(object, props, material)
 		updateDrawCallTransform(drawCall, props)
 		drawCall.color = props.Color
 		drawCall.transparency = props.Transparency
@@ -250,13 +285,13 @@ Workspace.InitRenderer = function(renderer, signal, game)
 		drawCall.Culling = true
 	end
 
-	local function getRenderKey(props)
+	local function getRenderKey(object, props)
 		local color = props.Color
 		local material = props.Material
 		local isGlass = material == Enum.Material.Glass
 		local size = props.Size
 		local texture = materialTextures[material]
-		local mesh = getMeshForShape(props.Shape, material)
+		local mesh = getRenderableMesh(object, props, material)
 		local materialParam3 = if isGlass
 			then math.max(0.05, math.min(size.X, size.Y, size.Z) * 0.5)
 			else math.max(1, math.max(size.X, size.Y, size.Z) / 4)
@@ -280,11 +315,11 @@ Workspace.InitRenderer = function(renderer, signal, game)
 
 		for _, object in pairs(renderParts) do
 			local props = rawget(object, "_props")
-			if not props then
+			if not props or (tonumber(props.Transparency) or 0) >= 1 then
 				continue
 			end
 
-			local key = getRenderKey(props)
+			local key = getRenderKey(object, props)
 			local group = dynamicGroups[key]
 			if not group then
 				group = {
@@ -296,7 +331,7 @@ Workspace.InitRenderer = function(renderer, signal, game)
 			end
 
 			local drawCall = {}
-			fillDrawCall(drawCall, props)
+			fillDrawCall(drawCall, object, props)
 			table.insert(group.drawCalls, drawCall)
 			table.insert(group.parts, object)
 			dynamicPartState[object] = {

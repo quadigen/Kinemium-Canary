@@ -101,6 +101,7 @@ if(KINE_WITH_FILAMENT)
     endif()
     if(KINE_FILAMENT_BACKEND_UPPER STREQUAL "VULKAN")
         set(KINE_MATC_BACKEND "vulkan")
+        find_package(Vulkan REQUIRED)
     else()
         set(KINE_MATC_BACKEND "opengl")
     endif()
@@ -237,6 +238,7 @@ if(KINE_WITH_FILAMENT)
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/../kine_vulkan_compositor/include
+            ${Vulkan_INCLUDE_DIRS}
             ${CMAKE_BINARY_DIR}/kine_skia/skia-src/third_party/externals/vulkan-headers/include
             ${FILAMENT_DIR}/include
             ${MAT_GEN_DIR}
@@ -263,6 +265,7 @@ if(KINE_WITH_FILAMENT)
     # factories. Static linking therefore needs both loader archives even
     # when this shim selects Vulkan exclusively at runtime.
     set(KINE_FILAMENT_CORE_LIBS
+        filamat
         filament
         backend
         bluegl

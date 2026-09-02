@@ -47,6 +47,7 @@ local mouseDeltaX = 0
 local mouseDeltaY = 0
 local mouseWheel = 0
 local cursorLocked = false
+local systemCursors = {}
 local imageCache = {}
 
 SDLAdapter.Key = {
@@ -228,6 +229,22 @@ function SDLAdapter:Init3D(window: typedefs.Window)
 		end
 		zune.ffi.free(backend)
 	end
+end
+
+function SDLAdapter:CreateMaterialShader(window: typedefs.Window, source: string)
+	return filament:CreateMaterialShader(window, source)
+end
+
+function SDLAdapter:DestroyMaterialShader(shader)
+	filament:DestroyMaterialShader(shader)
+end
+
+function SDLAdapter:SetMaterialShaderUniform(shader, name: string, values: { number })
+	return filament:SetMaterialShaderUniform(shader, name, values)
+end
+
+function SDLAdapter:SetGlobalMaterialShader(window: typedefs.Window, shader)
+	return filament:SetGlobalMaterialShader(window, shader)
 end
 
 function SDLAdapter:InitVulkanCompositor(window: typedefs.Window)
@@ -522,6 +539,31 @@ function SDLAdapter:CreateMeshTexture(window: typedefs.Window, path: string)
 	return texture
 end
 
+function SDLAdapter:DrawTextShadow(
+	window: typedefs.Window,
+	text: string,
+	args: typedefs.TextArgs,
+	offset,
+	blur: number,
+	spread: number,
+	color: typedefs.Color
+)
+	if not window_real(window) then
+		return
+	end
+
+	local mapped = text
+	local active = translation_layers[active_translation]
+
+	if active then
+		if active[text] then
+			mapped = active[text]
+		end
+	end
+
+	ui:DrawTextShadow(window._uihandle, mapped, args, offset, blur, spread, color)
+end
+
 function SDLAdapter:CreatePbrMeshTexture(
 	window: typedefs.Window,
 	albedoPath: string,
@@ -539,19 +581,18 @@ function SDLAdapter:CreatePbrMeshTexture(
 	local orm, ormSurface = if ormPath then loadRgbaImage(ormPath) else nil, nil
 	local heightImg, heightSurface = if heightPath then loadRgbaImage(heightPath) else nil, nil
 
-	local texture = filament:CreateMaterialTextureFromImages(
-		window,
-		albedo,
-		normal,
-		orm,
-		heightImg,
-		heightScale or 0.0
-	)
+	local texture = filament:CreateMaterialTextureFromImages(window, albedo, normal, orm, heightImg, heightScale or 0.0)
 
 	sdl.lib.SDL_DestroySurface(albedoSurface)
-	if normalSurface then sdl.lib.SDL_DestroySurface(normalSurface) end
-	if ormSurface then sdl.lib.SDL_DestroySurface(ormSurface) end
-	if heightSurface then sdl.lib.SDL_DestroySurface(heightSurface) end
+	if normalSurface then
+		sdl.lib.SDL_DestroySurface(normalSurface)
+	end
+	if ormSurface then
+		sdl.lib.SDL_DestroySurface(ormSurface)
+	end
+	if heightSurface then
+		sdl.lib.SDL_DestroySurface(heightSurface)
+	end
 
 	return texture
 end
@@ -603,6 +644,19 @@ function SDLAdapter:DrawImageSized(
 		return
 	end
 	ui:DrawImageSized(window._uihandle, image, rect, alpha)
+end
+
+function SDLAdapter:DrawImageRect(
+	window: typedefs.Window,
+	image: typedefs.Image,
+	sourceRect: typedefs.Rectangle,
+	destinationRect: typedefs.Rectangle,
+	alpha: number?
+)
+	if not window_real(window) then
+		return
+	end
+	ui:DrawImageRect(window._uihandle, image, sourceRect, destinationRect, alpha)
 end
 
 function SDLAdapter:DrawImageOutlineSized(
@@ -904,6 +958,27 @@ function SDLAdapter:HideCursor()
 	sdl.lib.SDL_HideCursor()
 end
 
+function SDLAdapter:SetMouseCursor(cursor: number)
+	local cursorMap = {
+		[0] = 0, -- default
+		[1] = 0, -- arrow
+		[2] = 1, -- text
+		[3] = 3, -- crosshair
+		[4] = 11, -- pointer
+		[5] = 7, -- east/west resize
+		[6] = 8, -- north/south resize
+		[7] = 5, -- north-west/south-east resize
+		[8] = 6, -- north-east/south-west resize
+		[9] = 9, -- move
+		[10] = 10, -- not allowed
+	}
+	local systemCursor = cursorMap[cursor] or 0
+	if not systemCursors[systemCursor] then
+		systemCursors[systemCursor] = sdl.lib.SDL_CreateSystemCursor(systemCursor)
+	end
+	sdl.lib.SDL_SetCursor(systemCursors[systemCursor])
+end
+
 function SDLAdapter:IsWindowFocused(window: typedefs.Window): boolean
 	if not window_real(window) then
 		return false
@@ -1114,6 +1189,61 @@ function SDLAdapter:DrawRectangle(window: typedefs.Window, rectangle: typedefs.R
 		return
 	end
 	ui:DrawRect(window._uihandle, rectangle)
+	return {
+		Hovered = function(func, renderer)
+			if renderer:isMouseInRect(rectangle) then
+				func(true)
+			else
+				func(false)
+			end
+		end,
+	}
+end
+
+function SDLAdapter:DrawRotatedRectangle(
+	window: typedefs.Window,
+	rectangle: typedefs.Rectangle,
+	rotationDegrees: number
+)
+	if not window_real(window) then
+		return
+	end
+	ui:DrawRotatedRect(window._uihandle, rectangle, rotationDegrees)
+end
+
+function SDLAdapter:DrawCircle(window: typedefs.Window, center, radius: number, color, strokeWidth: number?)
+	if not window_real(window) then
+		return
+	end
+	ui:DrawCircle(window._uihandle, center, radius, color, strokeWidth)
+end
+
+function SDLAdapter:DrawLine(window: typedefs.Window, from, to, strokeWidth: number, color)
+	if not window_real(window) then
+		return
+	end
+	ui:DrawLine(window._uihandle, from, to, strokeWidth, color)
+end
+
+function SDLAdapter:DrawPolygon(window: typedefs.Window, points, closed: boolean, color, strokeWidth: number?)
+	if not window_real(window) then
+		return
+	end
+	ui:DrawPolygon(window._uihandle, points, closed, color, strokeWidth)
+end
+
+function SDLAdapter:GetSurfacePixel(window: typedefs.Window, x: number, y: number)
+	if not window_real(window) then
+		return { R = 0, G = 0, B = 0, A = 0 }
+	end
+	return ui:GetPixel(window._uihandle, x, y)
+end
+
+function SDLAdapter:GetSurfacePixels(window: typedefs.Window)
+	if not window_real(window) then
+		return nil, 0
+	end
+	return ui:GetPixelsAndPitch(window._uihandle)
 end
 
 function SDLAdapter:DrawRoundRectangle(
@@ -1187,6 +1317,25 @@ end
 
 function SDLAdapter:CreateSkiaSurface(width, height): typedefs.Surface2D
 	return { _uihandle = ui:InitSkiaSurface(width, height), width = width, height = height }
+end
+
+function SDLAdapter:CreateRuntimeShader(source: string)
+	return ui:CreateRuntimeShader(source)
+end
+
+function SDLAdapter:DestroyRuntimeShader(shader)
+	ui:DestroyRuntimeShader(shader)
+end
+
+function SDLAdapter:SetRuntimeShaderUniform(shader, name: string, values: { number })
+	return ui:SetRuntimeShaderUniform(shader, name, values)
+end
+
+function SDLAdapter:DrawRuntimeShaderRectangle(window: typedefs.Window, shader, rectangle: typedefs.Rectangle)
+	if not window_real(window) then
+		return
+	end
+	ui:DrawRuntimeShaderRect(window._uihandle, shader, rectangle)
 end
 
 function SDLAdapter:GetFontAscent(fontSize, font: typedefs.Font)

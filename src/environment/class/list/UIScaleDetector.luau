@@ -2,11 +2,19 @@
 local Vector2 = require("@Vector2")
 local Vector3 = require("@Vector3")
 local UDim2 = require("@UDim2")
-local adapter = require("@RaylibAdapter")
+local Argon = require("@Argon")
+local Enum = require("@EnumMap")
 local MouseCursor = require("@Kinemium.MouseCursor")
 
-local aereon = require("@Aereon")
-local arect = aereon.rect()
+local function makeRect(x, y, width, height)
+	return { x = x, y = y, width = width, height = height }
+end
+
+local function mouseInRect(rect)
+	local mouse = Argon:GetMousePosition()
+	return mouse.X >= rect.x and mouse.X <= rect.x + rect.width
+		and mouse.Y >= rect.y and mouse.Y <= rect.y + rect.height
+end
 
 local ZERO_V2 = Vector2.new(0, 0)
 local HANDLE_SZ = 10 -- half-size of each hit region in pixels
@@ -23,17 +31,17 @@ local HANDLES = {
 }
 
 local CURSORS = {
-	TL = adapter.const.MouseCursor.MOUSE_CURSOR_RESIZE_NWSE,
-	BR = adapter.const.MouseCursor.MOUSE_CURSOR_RESIZE_NWSE,
-	TR = adapter.const.MouseCursor.MOUSE_CURSOR_RESIZE_NESW,
-	BL = adapter.const.MouseCursor.MOUSE_CURSOR_RESIZE_NESW,
-	T = adapter.const.MouseCursor.MOUSE_CURSOR_RESIZE_NS,
-	B = adapter.const.MouseCursor.MOUSE_CURSOR_RESIZE_NS,
-	L = adapter.const.MouseCursor.MOUSE_CURSOR_RESIZE_EW,
-	R = adapter.const.MouseCursor.MOUSE_CURSOR_RESIZE_EW,
+	TL = Enum.KinemiumMouseCursor.MOUSE_CURSOR_RESIZE_NWSE.Value,
+	BR = Enum.KinemiumMouseCursor.MOUSE_CURSOR_RESIZE_NWSE.Value,
+	TR = Enum.KinemiumMouseCursor.MOUSE_CURSOR_RESIZE_NESW.Value,
+	BL = Enum.KinemiumMouseCursor.MOUSE_CURSOR_RESIZE_NESW.Value,
+	T = Enum.KinemiumMouseCursor.MOUSE_CURSOR_RESIZE_NS.Value,
+	B = Enum.KinemiumMouseCursor.MOUSE_CURSOR_RESIZE_NS.Value,
+	L = Enum.KinemiumMouseCursor.MOUSE_CURSOR_RESIZE_EW.Value,
+	R = Enum.KinemiumMouseCursor.MOUSE_CURSOR_RESIZE_EW.Value,
 }
 
-local function getParentMetrics(parent)
+local function getParentMetrics(parent, window)
 	local parentAbsPos = ZERO_V2
 	local parentSize = ZERO_V2
 	if not parent then
@@ -49,10 +57,7 @@ local function getParentMetrics(parent)
 	if parent.AbsoluteSize then
 		parentSize = parent.AbsoluteSize
 	elseif parent.Size and parent.Size.ToPixels then
-		local dpiScale = adapter.lib.GetWindowScaleDPI()
-		parentSize = parent.Size:ToPixels(
-			Vector2.new(adapter.lib.GetRenderWidth() / dpiScale.x, adapter.lib.GetRenderHeight() / dpiScale.y)
-		)
+		parentSize = parent.Size:ToPixels(Vector2.new(Argon:GetRenderWidth(window), Argon:GetRenderHeight(window)))
 	end
 
 	return parentAbsPos, parentSize
@@ -87,7 +92,7 @@ local function getHandleRect(key, absPos, absSize)
 		cy = absPos.Y + absSize.Y
 	end
 
-	return arect.new(cx - HANDLE_SZ, cy - HANDLE_SZ, HANDLE_SZ * 2, HANDLE_SZ * 2)
+	return makeRect(cx - HANDLE_SZ, cy - HANDLE_SZ, HANDLE_SZ * 2, HANDLE_SZ * 2)
 end
 
 local propTable = {
@@ -123,10 +128,10 @@ return {
 				return
 			end
 
-			local parentAbsPos, parentSize = getParentMetrics(adornee.Parent)
+			local parentAbsPos, parentSize = getParentMetrics(adornee.Parent, renderer.Window)
 			local anchor = adornee.AnchorPoint or ZERO_V2
-			local mousePos = adapter.lib.GetMousePosition()
-			local mx, my = mousePos.x, mousePos.y
+			local mousePos = Argon:GetMousePosition()
+			local mx, my = mousePos.X, mousePos.Y
 
 			--  Active resize
 			if instance.isResizing and instance.activeHandle then
@@ -171,9 +176,8 @@ return {
 
 				-- Clamp to screen
 				if instance.RespectScreenBounds then
-					local dpiScale = adapter.lib.GetWindowScaleDPI()
-					local screenW = adapter.lib.GetScreenWidth() / dpiScale.x
-					local screenH = adapter.lib.GetScreenHeight() / dpiScale.y
+					local screenW = Argon:GetRenderWidth(renderer.Window)
+					local screenH = Argon:GetRenderHeight(renderer.Window)
 					left = math.clamp(left, 0, screenW)
 					top = math.clamp(top, 0, screenH)
 					right = math.clamp(right, 0, screenW)
@@ -208,10 +212,10 @@ return {
 
 				MouseCursor.request(CURSORS[instance.activeHandle])
 
-				if adapter.lib.IsMouseButtonReleased(0) == 1 then
+				if Argon:IsMouseButtonReleased(Argon.MouseButton.Left) then
 					instance.isResizing = false
 					instance.activeHandle = nil
-					MouseCursor.request(adapter.const.MouseCursor.MOUSE_CURSOR_DEFAULT)
+					MouseCursor.request(Enum.KinemiumMouseCursor.MOUSE_CURSOR_DEFAULT.Value)
 				end
 
 				return
@@ -221,11 +225,11 @@ return {
 
 			for key, _ in pairs(HANDLES) do
 				local hr = getHandleRect(key, absPos, absSize)
-				if arect.MouseIsInRect(hr) then
+				if mouseInRect(hr) then
 					hoveredHandle = key
 					MouseCursor.request(CURSORS[key])
 
-					if adapter.lib.IsMouseButtonDown(0) == 1 and not instance.isResizing then
+					if Argon:IsMouseButtonDown(Argon.MouseButton.Left) and not instance.isResizing then
 						instance.isResizing = true
 						instance.activeHandle = key
 						instance._startMouse = Vector3.new(mx, my, 0)
@@ -238,7 +242,7 @@ return {
 			end
 
 			if not hoveredHandle then
-				MouseCursor.request(adapter.const.MouseCursor.MOUSE_CURSOR_DEFAULT)
+				MouseCursor.request(Enum.KinemiumMouseCursor.MOUSE_CURSOR_DEFAULT.Value)
 			end
 		end
 

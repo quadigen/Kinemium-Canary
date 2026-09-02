@@ -1,6 +1,6 @@
 local ffi = zune.ffi
 
-local info = require("./bindings")
+local info = require("@box2dbindings")
 
 local libname = "KinemiumLibs." .. ffi.suffix
 

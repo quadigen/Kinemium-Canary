@@ -2,6 +2,7 @@
 local Vector2 = require("@Vector2")
 local Enum = require("@EnumMap")
 local UDim = require("@UDim")
+local UILayout = require("@UILayout")
 
 local propTable = {
 	Name = "UIGridLayout",
@@ -16,7 +17,7 @@ local propTable = {
 
 	FillDirection = Enum.FillDirection.Horizontal,
 
-	render = function(lib, object, dt, structs)
+	render = function(surface, object)
 		if not object.Enabled then
 			return
 		end
@@ -25,33 +26,11 @@ local propTable = {
 			return
 		end
 
-		local function GetAbsoluteSize(obj)
-			if obj.AbsoluteSize then
-				return obj.AbsoluteSize
-			end
-			if obj:IsA("ScreenGui") then
-				local dpiScale = lib.GetWindowScaleDPI()
-				return Vector2.new(lib.GetRenderWidth() / dpiScale.x, lib.GetRenderHeight() / dpiScale.y)
-			else
-				local parentSize = GetAbsoluteSize(obj.Parent)
-				return obj.Size:ToPixels(parentSize)
-			end
-		end
+		local parentSize = UILayout.GetAbsoluteSize(parent, surface)
 
-		local parentSize = GetAbsoluteSize(parent)
-
-		local totalPaddingX = 0
-		local totalPaddingY = 0
-		for _, child in ipairs(parent:GetChildren()) do
-			if child.ClassName == "UIPadding" then
-				local px = child.Padding:ToPixels(parentSize)
-				totalPaddingX = totalPaddingX + px.X
-				totalPaddingY = totalPaddingY + px.Y
-			end
-		end
-
-		local effectiveWidth = math.max(0, parentSize.X - totalPaddingX * 2)
-		local effectiveHeight = math.max(0, parentSize.Y - totalPaddingY * 2)
+		local totalPaddingX, paddingRight, totalPaddingY, paddingBottom = UILayout.GetPadding(parent, parentSize)
+		local effectiveWidth = math.max(0, parentSize.X - totalPaddingX - paddingRight)
+		local effectiveHeight = math.max(0, parentSize.Y - totalPaddingY - paddingBottom)
 		local effectiveSize = Vector2.new(effectiveWidth, effectiveHeight)
 
 		local padX = object.CellPaddingX.Scale * effectiveSize.X + object.CellPaddingX.Offset
@@ -76,7 +55,7 @@ local propTable = {
 			local currentRowWidth = 0
 
 			for _, child in ipairs(children) do
-				local size = child.Size:ToPixels(effectiveSize)
+				local size = UILayout.GetSize(child, effectiveSize)
 				local neededWidth = currentRowWidth > 0 and (currentRowWidth + padX + size.X) or size.X
 
 				if neededWidth > effectiveWidth and #currentRow > 0 then
@@ -97,7 +76,7 @@ local propTable = {
 			for i, row in ipairs(rows) do
 				local rowH = 0
 				for _, child in ipairs(row) do
-					local size = child.Size:ToPixels(effectiveSize)
+					local size = UILayout.GetSize(child, effectiveSize)
 					rowH = math.max(rowH, size.Y)
 				end
 				rowHeights[i] = rowH
@@ -120,7 +99,7 @@ local propTable = {
 
 				local rowWidth = 0
 				for j, child in ipairs(row) do
-					local size = child.Size:ToPixels(effectiveSize)
+					local size = UILayout.GetSize(child, effectiveSize)
 					rowWidth = rowWidth + size.X
 					if j < #row then
 						rowWidth = rowWidth + padX
@@ -136,7 +115,7 @@ local propTable = {
 
 				local curX = startX
 				for _, child in ipairs(row) do
-					local size = child.Size:ToPixels(effectiveSize)
+					local size = UILayout.GetSize(child, effectiveSize)
 
 					-- Align cell vertically within the row
 					local cellY = curY
@@ -160,7 +139,7 @@ local propTable = {
 			local currentColHeight = 0
 
 			for _, child in ipairs(children) do
-				local size = child.Size:ToPixels(effectiveSize)
+				local size = UILayout.GetSize(child, effectiveSize)
 				local neededHeight = currentColHeight > 0 and (currentColHeight + padY + size.Y) or size.Y
 
 				if neededHeight > effectiveHeight and #currentCol > 0 then
@@ -181,7 +160,7 @@ local propTable = {
 			for i, col in ipairs(cols) do
 				local colW = 0
 				for _, child in ipairs(col) do
-					local size = child.Size:ToPixels(effectiveSize)
+					local size = UILayout.GetSize(child, effectiveSize)
 					colW = math.max(colW, size.X)
 				end
 				colWidths[i] = colW
@@ -204,7 +183,7 @@ local propTable = {
 
 				local colHeight = 0
 				for j, child in ipairs(col) do
-					local size = child.Size:ToPixels(effectiveSize)
+					local size = UILayout.GetSize(child, effectiveSize)
 					colHeight = colHeight + size.Y
 					if j < #col then
 						colHeight = colHeight + padY
@@ -220,7 +199,7 @@ local propTable = {
 
 				local curY = startY
 				for _, child in ipairs(col) do
-					local size = child.Size:ToPixels(effectiveSize)
+					local size = UILayout.GetSize(child, effectiveSize)
 
 					local cellX = curX
 					if object.HorizontalAlignment == Enum.HorizontalAlignment.Center then

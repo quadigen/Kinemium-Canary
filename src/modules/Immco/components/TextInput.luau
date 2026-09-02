@@ -349,7 +349,15 @@ local function cursorXInLine(window, line, cursorPos: number, font, textSize: nu
 	return argon:MeasureText(window, line.Text:sub(1, localPos), textSize, font)
 end
 
-local function moveCursorVertical(window, lines, cursorPos: number, delta: number, preferredX: number?, font, textSize: number): (number, number)
+local function moveCursorVertical(
+	window,
+	lines,
+	cursorPos: number,
+	delta: number,
+	preferredX: number?,
+	font,
+	textSize: number
+): (number, number)
 	local lineIndex = lineIndexFromCursor(lines, cursorPos)
 	local line = lines[lineIndex]
 	local desiredX = preferredX or cursorXInLine(window, line, cursorPos, font, textSize)
@@ -582,10 +590,6 @@ local function getSyntaxHighlighter(params)
 	end
 	return nil
 end
-
--- Code editor customization: modifier-key detection --------------------------------------------
--- argon:IsKeyDown reads SDL_GetKeyboardState, which is indexed by scancode (argon.Key.*),
--- so held-state checks go through IsKeyDown rather than the per-event Keydowns list.
 
 function isModifierDown(name: "Shift" | "Ctrl" | "Alt"): boolean
 	if name == "Shift" then
@@ -911,17 +915,34 @@ return function(params: typedefs.TextInputParams, dt: number)
 				elseif key == SDLK_PAGEUP and multiline then -- page up
 					lines = buildLines(field.text)
 					local pageLines = math.max(1, math.floor(innerHeight / lineHeight) - 1)
-					field.cursorPos, field.preferredCaretX =
-						moveCursorVertical(window, lines, field.cursorPos, -pageLines, field.preferredCaretX, font, textSize)
+					field.cursorPos, field.preferredCaretX = moveCursorVertical(
+						window,
+						lines,
+						field.cursorPos,
+						-pageLines,
+						field.preferredCaretX,
+						font,
+						textSize
+					)
 					field.scrollTargetY = math.max(0, field.scrollTargetY - pageLines * lineHeight)
 					updateSelectionAfterMove(field, oldCursor)
 					field.lastBlinkReset = os.clock()
 				elseif key == SDLK_PAGEDOWN and multiline then -- page down
 					lines = buildLines(field.text)
 					local pageLines = math.max(1, math.floor(innerHeight / lineHeight) - 1)
-					field.cursorPos, field.preferredCaretX =
-						moveCursorVertical(window, lines, field.cursorPos, pageLines, field.preferredCaretX, font, textSize)
-					field.scrollTargetY = math.min(math.max(0, #lines * lineHeight - innerHeight), field.scrollTargetY + pageLines * lineHeight)
+					field.cursorPos, field.preferredCaretX = moveCursorVertical(
+						window,
+						lines,
+						field.cursorPos,
+						pageLines,
+						field.preferredCaretX,
+						font,
+						textSize
+					)
+					field.scrollTargetY = math.min(
+						math.max(0, #lines * lineHeight - innerHeight),
+						field.scrollTargetY + pageLines * lineHeight
+					)
 					updateSelectionAfterMove(field, oldCursor)
 					field.lastBlinkReset = os.clock()
 				elseif key == SDLK_HOME then -- home
@@ -1147,10 +1168,8 @@ return function(params: typedefs.TextInputParams, dt: number)
 		height = params.height,
 	}, cornerRadius, cornerRadius)
 
-	local bgColor = withTransparency(
-		focused and (params.FocusColor or params.Color) or params.Color,
-		params.BackgroundTransparency
-	)
+	local bgColor =
+		withTransparency(focused and (params.FocusColor or params.Color) or params.Color, params.BackgroundTransparency)
 	if isVisibleColor(bgColor) then
 		argon:DrawRectangle(window, {
 			x = params.x,
@@ -1167,16 +1186,20 @@ return function(params: typedefs.TextInputParams, dt: number)
 	local currentLine = lines[currentLineIndex]
 	local caretTarget = cursorXInLine(window, currentLine, field.cursorPos, font, textSize)
 
-	if multiline and renderer:isMouseInRect({
-		x = params.x,
-		y = params.y,
-		width = params.width,
-		height = params.height,
-	}) then
+	if
+		multiline
+		and renderer:isMouseInRect({
+			x = params.x,
+			y = params.y,
+			width = params.width,
+			height = params.height,
+		})
+	then
 		local wheelDelta = argon:GetMouseWheelMove()
 		if wheelDelta ~= 0 then
 			local maxScrollY = math.max(0, #lines * lineHeight - innerHeight)
-			field.scrollTargetY = math.clamp(field.scrollTargetY - wheelDelta * (params.ScrollSpeed or lineHeight * 3), 0, maxScrollY)
+			field.scrollTargetY =
+				math.clamp(field.scrollTargetY - wheelDelta * (params.ScrollSpeed or lineHeight * 3), 0, maxScrollY)
 		end
 	end
 
@@ -1380,7 +1403,8 @@ return function(params: typedefs.TextInputParams, dt: number)
 				local localStart = math.clamp(startPos - line.Start, 0, #line.Text)
 				local localEnd = math.clamp(endPos - line.Start, localStart, #line.Text)
 				local prefixWidth = argon:MeasureText(window, line.Text:sub(1, localStart), textSize, font)
-				local selectionWidth = argon:MeasureText(window, line.Text:sub(localStart + 1, localEnd), textSize, font)
+				local selectionWidth =
+					argon:MeasureText(window, line.Text:sub(localStart + 1, localEnd), textSize, font)
 				if selectionWidth <= 0 then
 					selectionWidth = argon:MeasureText(window, " ", textSize, font)
 				end
@@ -1437,7 +1461,8 @@ return function(params: typedefs.TextInputParams, dt: number)
 					local segments = highlightFn(line.Text, syntaxColors)
 					for _, segment in segments do
 						if segment.Start >= 1 and segment.End >= segment.Start and segment.End <= #line.Text then
-							local prefixWidth = argon:MeasureText(window, line.Text:sub(1, segment.Start - 1), textSize, font)
+							local prefixWidth =
+								argon:MeasureText(window, line.Text:sub(1, segment.Start - 1), textSize, font)
 							Text({
 								x = textX + prefixWidth,
 								y = lineY,

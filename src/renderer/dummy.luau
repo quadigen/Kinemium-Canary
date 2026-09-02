@@ -178,9 +178,14 @@ function KiRend.new(config: KiRendConf)
 	local perf_stats = {
 		frame_ms = 0,
 		fps = simulatedFPS,
+		frame_setup_ms = 0,
 		update_ms = 0,
+		render_ms = 0,
+		afterstep_ms = 0,
 		render3d_ms = 0,
 		ui_ms = 0,
+		ui_base_ms = 0,
+		ui_overlay_ms = 0,
 		gui_roots = 0,
 		scene_roots_3d = 0,
 		mesh_calls = 0,
@@ -193,8 +198,13 @@ function KiRend.new(config: KiRendConf)
 		call3d_ms = 0,
 		dispatch_ms = 0,
 		render3d_update_ms = 0,
-		gc_ms = 0,
-		gc_last = os.clock(),
+		filament_ms = 0,
+		compositor_ms = 0,
+		compositor_acquire_ms = 0,
+		compositor_overlay_wait_ms = 0,
+		compositor_submit_present_ms = 0,
+		gc_ms = 0, -- retained for compatibility; automatic GC has no forced-pause timing
+		gc_mode = "automatic",
 	}
 
 	local function getSortedPool(pool)
@@ -521,6 +531,10 @@ function KiRend.new(config: KiRendConf)
 		activeCamera = raylibCam
 	end
 
+	function rendererObject:GetActiveCamera()
+		return activeCamera
+	end
+
 	function rendererObject:InitAudioDevice()
 		-- no-op in headless
 	end
@@ -621,28 +635,30 @@ function KiRend.new(config: KiRendConf)
 			pcall(v, rendererObject.RuntimeLibrary)
 		end
 
-		perf_stats.ui_ms = (os.clock() - uiStart) * 1000
+		perf_stats.ui_base_ms = (os.clock() - uiStart) * 1000
+		perf_stats.ui_ms = perf_stats.ui_base_ms
 	end
 
 	-- Matches the real renderer's lowercase `step` signature
 	function rendererObject:step(time)
 		local frameStart = os.clock()
-		local updateStart = os.clock()
-
-		rendererObject.RuntimeLibrary.dt = frameTime
-		rendererObject.RuntimeLibrary.time = time
+		local frameSetupStart = frameStart
 
 		if ENGINE_PROFILER then
 			ENGINE_PROFILER:NextFrame()
+			ENGINE_PROFILER:Begin("FrameSetup")
+		end
+
+		rendererObject.RuntimeLibrary.dt = frameTime
+		rendererObject.RuntimeLibrary.time = time
+		perf_stats.frame_setup_ms = (os.clock() - frameSetupStart) * 1000
+
+		if ENGINE_PROFILER then
+			ENGINE_PROFILER:End()
 			ENGINE_PROFILER:Begin("Update")
 		end
 
-		if os.clock() - perf_stats.gc_last >= 10 then
-			local gcStart = os.clock()
-			zune.luau.garbagecollect()
-			perf_stats.gc_ms = (os.clock() - gcStart) * 1000
-			perf_stats.gc_last = os.clock()
-		end
+		local updateStart = os.clock()
 
 		for _, v in pairs(renderer_hooks.Renderstep) do
 			pcall(v, frameTime)
@@ -663,24 +679,36 @@ function KiRend.new(config: KiRendConf)
 			ENGINE_PROFILER:Begin("Render")
 		end
 
+		local renderStart = os.clock()
 		rendererObject:Render3D()
 		rendererObject:Render2D()
+		perf_stats.render_ms = (os.clock() - renderStart) * 1000
+
+		if ENGINE_PROFILER then
+			ENGINE_PROFILER:End()
+			ENGINE_PROFILER:Begin("Dispatch")
+		end
 
 		local dispatchStart = os.clock()
+		renderer_eventbus:Fire("Heartbeat", frameTime)
 		perf_stats.dispatch_ms = (os.clock() - dispatchStart) * 1000
 
-		renderer_eventbus:Fire("Heartbeat", frameTime)
+		if ENGINE_PROFILER then
+			ENGINE_PROFILER:End()
+			ENGINE_PROFILER:Begin("Afterstep")
+		end
 
+		local afterstepStart = os.clock()
+		for _, v in pairs(renderer_hooks.Afterstep) do
+			pcall(v, frameTime)
+		end
+		perf_stats.afterstep_ms = (os.clock() - afterstepStart) * 1000
 		perf_stats.frame_ms = (os.clock() - frameStart) * 1000
 		perf_stats.fps = simulatedFPS
 
 		if ENGINE_PROFILER then
 			ENGINE_PROFILER:SetCounter("FPS", simulatedFPS)
 			ENGINE_PROFILER:End()
-		end
-
-		for _, v in pairs(renderer_hooks.Afterstep) do
-			pcall(v, frameTime)
 		end
 
 		task.wait(0)
@@ -699,29 +727,28 @@ function KiRend.new(config: KiRendConf)
 		lastFrameTime = os.clock()
 	end
 
-	function rendererObject:Run(maxFrames)
+	function rendererObject:Run(_targetFPS)
 		isRunning = true
 		lastFrameTime = os.clock()
 
-		while isRunning do
+		local function runFrame()
+			if not isRunning then
+				rendererObject:Shutdown()
+				return
+			end
+
 			local frameStart = os.clock()
 			time += frameTime
 			frameCount += 1
 			rendererObject:step(time)
 
-			local sleepTime = frameTime - (os.clock() - frameStart)
-			if sleepTime > 0 then
-				task.wait(sleepTime)
-			else
-				task.wait(0) -- yield to avoid starving other threads
-			end
-
-			if maxFrames and frameCount >= maxFrames then
-				break
-			end
+			-- Zune retains C callback depth across a tight task.wait loop. Pumping
+			-- each headless frame as a new scheduled callback keeps the stack flat.
+			local sleepTime = math.max(0.001, frameTime - (os.clock() - frameStart))
+			task.delay(sleepTime, runFrame)
 		end
 
-		rendererObject:Shutdown()
+		runFrame()
 	end
 
 	function rendererObject:Stop()
@@ -767,9 +794,14 @@ function KiRend.new(config: KiRendConf)
 			gizmoCount = gizmoCount,
 			perf = {
 				frame_ms = perf_stats.frame_ms,
+				frame_setup_ms = perf_stats.frame_setup_ms,
 				update_ms = perf_stats.update_ms,
+				render_ms = perf_stats.render_ms,
+				afterstep_ms = perf_stats.afterstep_ms,
 				render3d_ms = perf_stats.render3d_ms,
 				ui_ms = perf_stats.ui_ms,
+				ui_base_ms = perf_stats.ui_base_ms,
+				ui_overlay_ms = perf_stats.ui_overlay_ms,
 				batches_3d = perf_stats.batches_3d,
 				mesh_calls = perf_stats.mesh_calls,
 				instanced_batches = perf_stats.instanced_batches,
@@ -782,7 +814,13 @@ function KiRend.new(config: KiRendConf)
 				call3d_ms = perf_stats.call3d_ms,
 				dispatch_ms = perf_stats.dispatch_ms,
 				render3d_update_ms = perf_stats.render3d_update_ms,
+				filament_ms = perf_stats.filament_ms,
+				compositor_ms = perf_stats.compositor_ms,
+				compositor_acquire_ms = perf_stats.compositor_acquire_ms,
+				compositor_overlay_wait_ms = perf_stats.compositor_overlay_wait_ms,
+				compositor_submit_present_ms = perf_stats.compositor_submit_present_ms,
 				gc_ms = perf_stats.gc_ms,
+				gc_mode = perf_stats.gc_mode,
 			},
 			windowSize = {
 				width = config.width,

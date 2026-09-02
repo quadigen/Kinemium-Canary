@@ -6,9 +6,6 @@ local KinemiumIconLoader = Instance.new("KinemiumIconLoader")
 KinemiumIconLoader.ExplorerHidden = true
 KinemiumIconLoader._Intents = Enum.PluginIntents.UI
 
-local adapter = require("@RaylibAdapter")
-local lib = adapter.lib
-
 local zembed = require("@zembed")
 local general = zembed.AssetPath("kineasset://images/icons")
 
@@ -18,34 +15,6 @@ KinemiumIconLoader.InitRenderer = function(renderer, renderer_signal)
 	end
 	local registry = {}
 	local textures = {}
-
-	local adapter = require("@RaylibAdapter")
-
-	local function reload()
-		for _, data in pairs(textures) do
-			if data.texture then
-				lib.UnloadTexture(data.texture)
-			end
-		end
-
-		table.clear(registry)
-		table.clear(textures)
-
-		for _, file in pairs(type(general) == "string" and fs.entries(general) or general) do
-			local fileName = file.name
-			local filePath
-
-			if type(general) == "string" then
-				filePath = general .. "/" .. fileName
-			else
-				filePath = file
-			end
-
-			registry[fileName] = filePath
-
-			log("Loading " .. fileName)
-		end
-	end
 
 	KinemiumIconLoader:SetProperties({
 		Reload = reload,
@@ -163,8 +132,6 @@ KinemiumIconLoader.InitRenderer = function(renderer, renderer_signal)
 			table.clear(textures)
 		end,
 	})
-
-	reload()
 
 	return registry
 end

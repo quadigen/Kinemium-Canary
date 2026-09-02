@@ -4,7 +4,7 @@ local Color3 = require("@Color3")
 local meshgen = require("@meshgen")
 local Vector3 = require("@Vector3")
 local CFrame = require("@CFrame")
-local argon = require("@argon")
+local argon = require("@Argon")
 
 local EDGE_TABLE = {
 	0x0,
@@ -1164,7 +1164,7 @@ Terrain.InitRenderer = function(renderer, renderer_signal, datamodel)
 		local PhysicsService = datamodel:GetService("UnifiedPhysicsService")
 		if PhysicsService then
 			local k = chunkKey(cx, cy, cz)
-			PhysicsService.UpdateTerrainChunk(k, sv, si)
+			PhysicsService.UpdateTerrainChunk(k, sv, si, chunk.dominantMaterial)
 		end
 
 		if Terrain.Decoration then

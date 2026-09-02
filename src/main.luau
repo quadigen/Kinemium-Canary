@@ -317,6 +317,7 @@ end
 local Instance = require("@Instance")
 local Enum = require("@EnumMap")
 local kilang = require("@kilang")
+_G.kilang = kilang
 local task = zune.task
 local cam = require("./environment/class/list/Camera")
 
@@ -445,7 +446,7 @@ local function loadInternals()
 
 	local loadedCount = 0
 	loop("src/sandboxed/internals", function(path, entry)
-		if kilang.threads[path] then
+		if kilang.threads[path] and pcall(coroutine.status, kilang.threads[path]) and coroutine.status(kilang.threads[path]) ~= "dead" then
 			return
 		end
 
@@ -495,13 +496,23 @@ end
 -- LOAD USER SCRIPTS
 function Kinemium:run()
 	local loadedCount = 0
+	local requestedSandboxScript = GetFlagValue("sandbox-script")
+	if requestedSandboxScript then
+		requestedSandboxScript = normalizeScriptPath(requestedSandboxScript)
+	end
 	loop("src/sandboxed", function(path, entry)
 		local normalizedPath = normalizeScriptPath(path)
 		if normalizedPath:find("src/sandboxed/internals/", 1, true) then
 			return
 		end
+		if requestedSandboxScript then
+			local requestedName = requestedSandboxScript:match("([^/]+)$")
+			if normalizedPath ~= requestedSandboxScript and entry.name ~= requestedName then
+				return
+			end
+		end
 
-		if kilang.threads[path] then
+		if kilang.threads[path] and pcall(coroutine.status, kilang.threads[path]) and coroutine.status(kilang.threads[path]) ~= "dead" then
 			return
 		end
 
@@ -563,7 +574,9 @@ if FlagExists("kilang") then
 end
 
 -- INITIALIZE ENGINE
-loadInternals()
+if not FlagExists("no-internals") then
+	loadInternals()
+end
 httpServerViewer:Init(renderer)
 Kinemium:run()
 

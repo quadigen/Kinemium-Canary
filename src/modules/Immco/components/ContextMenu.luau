@@ -156,7 +156,7 @@ return function(params: ContextMenuParams, dt: number)
 			RetainedStorage = field.searchStorage,
 			renderer = renderer,
 			theme = theme,
-			Color = theme.BackgroundColor or params.Color or theme.SecondColor,
+			Color = theme.BackgroundColor or params.Color or theme.SecondaryColor,
 			FocusColor = params.HoverColor or theme.ThirdColor,
 			TextColor = params.TextColor or theme.TextColor,
 			PlaceholderColor = theme.SecondaryTextColor,

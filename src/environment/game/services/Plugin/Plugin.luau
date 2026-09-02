@@ -1,17 +1,13 @@
 local Instance = require("@Instance")
-local aereon = require("@Aereon")
-local adapter = require("@RaylibAdapter")
 local Color3 = require("@Color3")
 local signal = require("@Kinemium.signal")
 local Enum = require("@EnumMap")
 local ScreenGui = require("@ScreenGui")
+local Argon = require("@Argon")
+local Immco = require("@Immco")
 
 local Plugin = Instance.new("Plugin")
 Plugin._Intents = Enum.PluginIntents.UI
-
-local lib = adapter.lib
-local structs = adapter.structs
-local arect = require("@arect")
 
 local windowList = {}
 
@@ -93,15 +89,35 @@ local function removeArrayValue(list, value)
 	return false
 end
 
-local function colorToRaylib(color, transparency)
+local function colorToArgon(color, transparency)
 	local source = color or Color3.new(1, 1, 1)
+	if source.R ~= nil and source.G ~= nil and source.B ~= nil and source.type ~= "Color3" then
+		return {
+			R = source.R,
+			G = source.G,
+			B = source.B,
+			A = (source.A or 1) * (1 - (transparency or 0)),
+		}
+	end
 	local r, g, b = source:ToRGB()
-	return structs.Color:new({
-		r = r,
-		g = g,
-		b = b,
-		a = math.floor(255 * (1 - (transparency or 0))),
-	})
+	return Argon:RGBA(r, g, b, 1 - (transparency or 0))
+end
+
+local rect = {}
+
+function rect.new(x, y, width, height)
+	return { x = x or 0, y = y or 0, width = width or 0, height = height or 0 }
+end
+
+function rect.translate(value)
+	return value
+end
+
+function rect.MouseIsInRect(value)
+	local mouse = Argon:GetMousePosition()
+	local x = mouse.X or mouse.x or 0
+	local y = mouse.Y or mouse.y or 0
+	return x >= value.x and x <= value.x + value.width and y >= value.y and y <= value.y + value.height
 end
 
 local function getRectSize(component)
@@ -163,12 +179,290 @@ Plugin.InitRenderer = function(renderer, renderer_signal, game)
 			task.wait()
 		until game.GetService
 
-		local window = aereon.window(game)
-		local gui = aereon.gui
-		local textboxModule = aereon.textbox(nil, game)
+		local activeTheme
+		local retainedStorage = {}
+		local nextWidgetId = 0
+
+		local function nextId(prefix)
+			nextWidgetId += 1
+			return (prefix or "PluginWidget") .. tostring(nextWidgetId)
+		end
+
+		local function asArgonColor(value, fallback)
+			if value == nil then
+				return fallback
+			end
+			if value.type == "Color3" or value.ToRGB then
+				return colorToArgon(value, 0)
+			end
+			return value
+		end
+
+		local function createComponent(factoryName, rawConfig)
+			local config = copyTable(rawConfig or {})
+			local componentRect = rect.new(
+				config.x or config[1] or 0,
+				config.y or config[2] or 0,
+				config.width or config[3] or 120,
+				config.height or config[4] or 32
+			)
+			local id = config.id or nextId(factoryName)
+			local component = {}
+
+			function component.set(prop, value)
+				if prop == "obj_rect" then
+					componentRect = value
+				else
+					config[prop] = value
+				end
+				return component
+			end
+
+			function component.get(prop)
+				if prop == "obj_rect" then
+					return componentRect
+				end
+				local state = retainedStorage[id]
+				if state and state[prop] ~= nil then
+					return state[prop]
+				end
+				return config[prop]
+			end
+
+			function component.get_rect()
+				return componentRect
+			end
+
+			function component.focus()
+				retainedStorage.focusedId = id
+			end
+
+			function component.blur()
+				if retainedStorage.focusedId == id then
+					retainedStorage.focusedId = nil
+				end
+			end
+
+			function component.submit()
+				if config.onSubmit then
+					config.onSubmit(config.text or "")
+				end
+			end
+
+			function component.render(dt)
+				local theme = activeTheme or {}
+				local params = copyTable(config)
+				params.x = componentRect.x
+				params.y = componentRect.y
+				params.width = componentRect.width
+				params.height = componentRect.height
+				params.id = id
+				params.engine_window = renderer.Window
+				params.window = renderer.Window
+				params.renderer = renderer
+				params.theme = theme
+				params.RetainedStorage = retainedStorage
+				params.Color =
+					asArgonColor(params.Color or params.backgroundColor, theme.SecondaryColor or theme.BgColor)
+				params.TextColor = asArgonColor(params.TextColor or params.textColor, theme.TextColor)
+				params.PlaceholderColor = asArgonColor(
+					params.PlaceholderColor or params.placeholderColor,
+					theme.InputPlaceholderColor or theme.SecondaryTextColor
+				)
+				params.FocusColor = asArgonColor(params.FocusColor or params.focusColor, theme.InputFocusColor)
+
+				local hovered = renderer:isMouseInRect(componentRect)
+				local clicked = hovered and Argon:IsMouseButtonPressed(Argon.MouseButton.Left)
+				if (factoryName == "textButton" or factoryName == "imageButton") and clicked and params.onClick then
+					params.onClick(component)
+				elseif (factoryName == "checkbox" or factoryName == "switch") and clicked then
+					params.value = not not not params.value
+					config.value = params.value
+					if params.onChanged then
+						params.onChanged(params.value)
+					end
+				end
+
+				if factoryName == "label" then
+					Immco.Text(params, dt)
+				elseif factoryName == "textButton" then
+					Immco.TextButton(params, dt)
+				elseif factoryName == "imageButton" then
+					Immco.ImageButton(params, dt)
+				elseif factoryName == "image" then
+					Immco.Image(params, dt)
+				elseif factoryName == "checkbox" or factoryName == "switch" then
+					params.bool = params.value == true
+					Immco.Checkbox(params, dt)
+				elseif factoryName == "textInput" then
+					params.TextSize = params.TextSize or params.fontSize
+					params.ReadOnly = params.ReadOnly or params.readOnly
+					params.MultiLine = params.MultiLine or params.multiline
+					params.OnChange = params.OnChange or params.onChange
+					params.OnSubmit = params.OnSubmit or params.onSubmit
+					local text = Immco.TextInput(params, dt)
+					config.text = text
+				elseif factoryName == "dropdown" then
+					params.Options = params.Options or params.options
+					params.InitialSelected = params.InitialSelected or params.selectedIndex
+					params.OnChanged = params.OnChanged or params.onSelect or params.onChanged
+					local selected = Immco.Dropdown(params, dt)
+					config.selectedIndex = selected
+				elseif factoryName == "colorPicker" then
+					params.InitialColor = asArgonColor(params.InitialColor or params.color, theme.AccentColor)
+					params.OnChanged = params.OnChanged or params.onChanged
+					local color = Immco.ColorPicker(params, dt)
+					config.color = color
+				elseif factoryName == "table" then
+					Immco.Table(params, dt)
+				elseif factoryName == "contextMenu" then
+					Immco.ContextMenu(params, dt)
+				elseif factoryName == "tooltip" then
+					Immco.Tooltip(params, dt)
+				elseif factoryName == "tabs" then
+					params.tabs = params.tabs or {}
+					params.activeTab = params.activeIndex or 1
+					params.OnTabChanged = params.onTabChange
+					Immco.Widget(params, dt)
+				elseif factoryName == "slider" or factoryName == "stepper" then
+					local minimum = params.min or 0
+					local maximum = params.max or 100
+					if hovered and Argon:IsMouseButtonDown(Argon.MouseButton.Left) then
+						local mouse = Argon:GetMousePosition()
+						local alpha = math.clamp((mouse.X - params.x) / math.max(params.width, 1), 0, 1)
+						config.value = minimum + (maximum - minimum) * alpha
+						if params.onChanged then
+							params.onChanged(config.value)
+						end
+					end
+					Immco.RoundedRectangle(params, dt)
+					local alpha =
+						math.clamp(((config.value or minimum) - minimum) / math.max(maximum - minimum, 1), 0, 1)
+					Argon:DrawRectangle(renderer.Window, {
+						x = params.x,
+						y = params.y,
+						width = params.width * alpha,
+						height = params.height,
+						Color = theme.AccentColor,
+					})
+				elseif factoryName == "prompt" then
+					Immco.Widget(params, dt)
+				elseif factoryName == "spinner" then
+					Immco.RoundedRectangle(params, dt)
+				elseif factoryName == "frame" or factoryName == "card" then
+					Immco.RoundedRectangle(params, dt)
+				elseif factoryName == "engineUIContainer" then
+					-- Engine GuiObjects are rendered by the ScreenGui mounted on the PluginGui.
+				elseif factoryName == "progressBar" then
+					Immco.RoundedRectangle(params, dt)
+					local progress = math.clamp(params.progress or params.value or 0, 0, 1)
+					Argon:DrawRectangle(renderer.Window, {
+						x = params.x,
+						y = params.y,
+						width = params.width * progress,
+						height = params.height,
+						Color = theme.AccentColor,
+					})
+				else
+					Immco.Rectangle(params, dt)
+				end
+			end
+
+			return component
+		end
+
+		local gui = {}
+		for _, factoryName in ipairs({
+			"card",
+			"checkbox",
+			"colorPicker",
+			"contextMenu",
+			"dropdown",
+			"engineUIContainer",
+			"frame",
+			"image",
+			"imageButton",
+			"label",
+			"progressBar",
+			"prompt",
+			"slider",
+			"spinner",
+			"stepper",
+			"switch",
+			"table",
+			"tabs",
+			"textButton",
+			"textInput",
+			"tooltip",
+		}) do
+			gui[factoryName] = function(config)
+				return createComponent(factoryName, config)
+			end
+		end
+
+		local function createWindowManager()
+			local windows = {}
+			local manager = {}
+
+			function manager.create(config)
+				local pluginWindow = copyTable(config or {})
+				pluginWindow.x = pluginWindow.x or 80
+				pluginWindow.y = pluginWindow.y or 80
+				pluginWindow.width = pluginWindow.width or 360
+				pluginWindow.height = pluginWindow.height or 260
+				pluginWindow.title = pluginWindow.title or "Plugin Window"
+				pluginWindow.enabled = pluginWindow.enabled ~= false
+				pluginWindow.Closed = false
+
+				function pluginWindow:Close()
+					self.enabled = false
+					self.Closed = true
+				end
+
+				function pluginWindow:Open()
+					self.enabled = true
+					self.Closed = false
+				end
+
+				pluginWindow.Show = pluginWindow.Open
+				pluginWindow.Hide = pluginWindow.Close
+				table.insert(windows, pluginWindow)
+				return pluginWindow
+			end
+
+			function manager.draw(dt, theme)
+				activeTheme = theme
+				for _, pluginWindow in ipairs(windows) do
+					if pluginWindow.enabled and not pluginWindow.Closed then
+						Immco.Widget({
+							engine_window = renderer.Window,
+							x = pluginWindow.x,
+							y = pluginWindow.y,
+							width = pluginWindow.width,
+							height = pluginWindow.height,
+							theme = theme,
+							title = pluginWindow.headerRender == false and nil or pluginWindow.title,
+							tabs = pluginWindow.tabs,
+							callback = function()
+								if pluginWindow.step then
+									pluginWindow.step(pluginWindow, dt)
+								end
+							end,
+						}, dt)
+					end
+				end
+			end
+
+			return manager
+		end
+
+		local window = createWindowManager()
 		local availableWidgetTypes = getAvailableWidgetTypes(gui)
 		local widgetTypeLookup = {}
 		local toolbars = {}
+		local settings = {}
+		local activated = false
+		local exclusiveMouse = false
 		local iconLoader = game:GetService("KinemiumIconLoader")
 
 		for _, widgetType in ipairs(availableWidgetTypes) do
@@ -677,7 +971,7 @@ Plugin.InitRenderer = function(renderer, renderer_signal, game)
 		end
 
 		local function attachFriendlyFactories(target, createFn)
-			function target:CreateAereonWidget(widgetType, config, options)
+			function target:CreateArgonWidget(widgetType, config, options)
 				return createFn(widgetType, config, options)
 			end
 
@@ -685,7 +979,7 @@ Plugin.InitRenderer = function(renderer, renderer_signal, game)
 				return createFn(widgetType, config, options)
 			end
 
-			function target:SpawnAereonWidget(widgetType, config, options)
+			function target:SpawnArgonWidget(widgetType, config, options)
 				return createFn(widgetType, config, options)
 			end
 
@@ -695,174 +989,9 @@ Plugin.InitRenderer = function(renderer, renderer_signal, game)
 				end
 			end
 		end
-
 		local function createPluginTextInput(config)
-			local componentRect = arect.new(
-				config.x or config[1] or 0,
-				config.y or config[2] or 0,
-				config.width or config[3] or 220,
-				config.height or config[4] or 34
-			)
-
-			local textbox = textboxModule.new({
-				placeholder = config.placeholder,
-				fontSize = config.fontSize,
-				backgroundColor = config.backgroundColor,
-				textColor = config.textColor,
-				placeholderColor = config.placeholderColor,
-				borderColor = config.borderColor,
-				focusBorderColor = config.focusBorderColor,
-				selectionColor = config.selectionColor,
-				label = config.label,
-				labelPosition = config.labelPosition,
-				labelWidth = config.labelWidth,
-				labelGap = config.labelGap,
-				prefix = config.prefix,
-				suffix = config.suffix,
-				prefixGap = config.prefixGap,
-				suffixGap = config.suffixGap,
-				numeric = config.numeric,
-				numericMin = config.numericMin,
-				numericMax = config.numericMax,
-				numericStep = config.numericStep,
-				numericPrecision = config.numericPrecision,
-				showStepButtons = config.showStepButtons,
-				slider = config.slider,
-				sliderWidth = config.sliderWidth,
-				sliderMin = config.sliderMin,
-				sliderMax = config.sliderMax,
-				sliderStep = config.sliderStep,
-				sliderPosition = config.sliderPosition,
-				readOnly = config.readOnly,
-				maxLength = config.maxLength,
-				validator = config.validator,
-				selectAllOnFocus = config.selectAllOnFocus,
-				blurOnSubmit = config.blurOnSubmit,
-				clearOnEscape = config.clearOnEscape,
-				escapeBlurs = config.escapeBlurs,
-				onSubmit = config.onSubmit,
-				onFocus = config.onFocus,
-				onBlur = config.onBlur,
-			})
-
-			if config.text ~= nil then
-				local onChange = textbox.onChange
-				textbox.onChange = nil
-				textbox:setText(tostring(config.text))
-				textbox.onChange = onChange
-			end
-
-			local function applyThemeColor(prop, value)
-				if not value then
-					return false
-				end
-
-				if prop == "backgroundColor" then
-					textbox.theme.background = value:ToRaylib(textbox.BackgroundTransparency or 0)
-					return true
-				end
-				if prop == "textColor" then
-					textbox.TextColor = value
-					textbox.theme.text = value:ToRaylib(0)
-					return true
-				end
-				if prop == "placeholderColor" then
-					textbox.theme.placeholder = value:ToRaylib(0)
-					return true
-				end
-				if prop == "borderColor" then
-					textbox.theme.border = value:ToRaylib(textbox.BorderTransparency or 0)
-					return true
-				end
-				if prop == "focusBorderColor" then
-					textbox.theme.focusBorder = value:ToRaylib(textbox.BorderTransparency or 0)
-					return true
-				end
-				if prop == "selectionColor" then
-					textbox.theme.selection = value:ToRaylib(0.5)
-					return true
-				end
-
-				return false
-			end
-
-			local wrapper = {}
-
-			wrapper.set = function(prop, value)
-				if prop == "obj_rect" then
-					componentRect = value
-					return wrapper
-				end
-				if prop == "text" or prop == "value" then
-					textbox:setText(tostring(value or ""))
-					return wrapper
-				end
-				if prop == "placeholder" then
-					textbox.placeholder = tostring(value or "")
-					return wrapper
-				end
-				if prop == "fontSize" then
-					textbox.fontSize = value or textbox.fontSize
-					return wrapper
-				end
-
-				if applyThemeColor(prop, value) then
-					return wrapper
-				end
-
-				textbox[prop] = value
-				return wrapper
-			end
-
-			wrapper.get = function(prop)
-				if prop == "obj_rect" then
-					return componentRect
-				end
-				if prop == "text" or prop == "value" then
-					return textbox:getText()
-				end
-				if prop == "focused" or prop == "isFocused" then
-					return textbox.isFocused
-				end
-
-				return textbox[prop]
-			end
-
-			wrapper.get_rect = function()
-				return componentRect
-			end
-
-			wrapper.render = function(_dt)
-				textbox:drawWithExtras(componentRect.x, componentRect.y, componentRect.width, componentRect.height)
-			end
-
-			wrapper.setText = function(value)
-				textbox:setText(tostring(value or ""))
-				return wrapper
-			end
-
-			wrapper.getText = function()
-				return textbox:getText()
-			end
-
-			wrapper.focus = function()
-				textbox:focus()
-				return wrapper
-			end
-
-			wrapper.blur = function()
-				textbox:blur()
-				return wrapper
-			end
-
-			wrapper.submit = function()
-				textbox:submit()
-				return wrapper
-			end
-
-			return wrapper
+			return gui.textInput(copyTable(config or {}))
 		end
-
 		local function createRawWidget(widgetType, config)
 			local resolvedType = resolveWidgetType(widgetType)
 			local normalizedConfig = select(1, normalizeWidgetConfig(resolvedType, config))
@@ -932,7 +1061,7 @@ Plugin.InitRenderer = function(renderer, renderer_signal, game)
 				if self.component and self.component.set then
 					self.component.set(
 						"obj_rect",
-						arect.new(baseX + self.x, baseY + self.y + (yOffset or 0), width, height)
+						rect.new(baseX + self.x, baseY + self.y + (yOffset or 0), width, height)
 					)
 				end
 			end
@@ -1082,7 +1211,7 @@ Plugin.InitRenderer = function(renderer, renderer_signal, game)
 			wrapper = window.create(windowConfig)
 			windowData = Instance.new("PluginGui")
 			windowData.BaseClass = "Instance"
-			windowData.ClassName = windowData.ClassName or "PluginGui"
+			windowData.ClassName = windowConfig.className or "PluginGui"
 			windowData.ContentPaddingX = windowConfig.contentPaddingX or 0
 			windowData.ContentPaddingY = windowConfig.contentPaddingY or 0
 			windowData.PluginGuiId = windowConfig.pluginGuiId or windowConfig.id
@@ -1115,13 +1244,13 @@ Plugin.InitRenderer = function(renderer, renderer_signal, game)
 				if self._onClose then
 					pcall(self._onClose, self)
 				end
-				rawClose(self)
+				rawClose(wrapper)
 				self.Enabled = false
 			end
 
 			local rawOpen = wrapper.Open
 			function windowData:Open()
-				rawOpen(self)
+				rawOpen(wrapper)
 				self.enabled = true
 				self.Enabled = true
 			end
@@ -1384,10 +1513,13 @@ Plugin.InitRenderer = function(renderer, renderer_signal, game)
 						and self.backgroundTransparency ~= nil
 						and self.backgroundTransparency < 1
 					then
-						lib.DrawRectangleRec(
-							arect:translate(arect.new(viewX, viewY, viewWidth, viewHeight)),
-							colorToRaylib(self.backgroundColor, self.backgroundTransparency)
-						)
+						Argon:DrawRectangle(renderer.Window, {
+							x = viewX,
+							y = viewY,
+							width = viewWidth,
+							height = viewHeight,
+							Color = colorToArgon(self.backgroundColor, self.backgroundTransparency),
+						})
 					end
 
 					local padding = self.padding
@@ -1400,17 +1532,18 @@ Plugin.InitRenderer = function(renderer, renderer_signal, game)
 					local maxScroll = math.max(0, contentHeight - innerHeight)
 					self.scrollY = math.clamp(self.scrollY, 0, maxScroll)
 
-					local viewport = arect.new(viewX, viewY, viewWidth, viewHeight)
+					local viewport = rect.new(viewX, viewY, viewWidth, viewHeight)
 
-					if arect.MouseIsInRect(viewport) then
-						local wheel = lib.GetMouseWheelMove()
+					if rect.MouseIsInRect(viewport) then
+						local wheel = Argon:GetMouseWheelMove()
 						if wheel ~= 0 then
 							self.scrollY = math.clamp(self.scrollY - wheel * self.wheelStep, 0, maxScroll)
 						end
 					end
 
 					if self.clip then
-						lib.BeginScissorMode(viewX, viewY, viewWidth, viewHeight)
+						Argon:Save(renderer.Window)
+						Argon:ClipRoundRect(renderer.Window, viewport, 0, 0)
 					end
 
 					table.sort(self.children, function(a, b)
@@ -1424,7 +1557,7 @@ Plugin.InitRenderer = function(renderer, renderer_signal, game)
 					end
 
 					if self.clip then
-						lib.EndScissorMode()
+						Argon:Restore(renderer.Window)
 					end
 
 					if self.showScrollbar and maxScroll > 0 then
@@ -1432,19 +1565,25 @@ Plugin.InitRenderer = function(renderer, renderer_signal, game)
 						local trackY = viewY + 2
 						local trackHeight = viewHeight - 4
 
-						lib.DrawRectangleRec(
-							arect:translate(arect.new(trackX, trackY, self.scrollbarWidth, trackHeight)),
-							colorToRaylib(self.trackColor, self.trackTransparency)
-						)
+						Argon:DrawRectangle(renderer.Window, {
+							x = trackX,
+							y = trackY,
+							width = self.scrollbarWidth,
+							height = trackHeight,
+							Color = colorToArgon(self.trackColor, self.trackTransparency),
+						})
 
 						local thumbHeight = math.max(20, (innerHeight / contentHeight) * trackHeight)
 						local thumbTravel = trackHeight - thumbHeight
 						local thumbY = trackY + (self.scrollY / maxScroll) * thumbTravel
 
-						lib.DrawRectangleRec(
-							arect:translate(arect.new(trackX, thumbY, self.scrollbarWidth, thumbHeight)),
-							colorToRaylib(self.scrollbarColor, self.scrollbarTransparency)
-						)
+						Argon:DrawRectangle(renderer.Window, {
+							x = trackX,
+							y = thumbY,
+							width = self.scrollbarWidth,
+							height = thumbHeight,
+							Color = colorToArgon(self.scrollbarColor, self.scrollbarTransparency),
+						})
 					end
 				end
 
@@ -1631,12 +1770,17 @@ Plugin.InitRenderer = function(renderer, renderer_signal, game)
 					tooltip = tooltip,
 					width = 60,
 					height = 60,
-					texture = KinemiumIconLoader.ToTexture("./src/assets/images/icons/Move.png"),
+					texture = resolveToolbarIcon(icon)
+						or KinemiumIconLoader.ToTexture("./src/assets/images/icons/Move.png"),
 					callback = function(element, rect)
-						button.Click:Fire(element, rect)
+						if button.Enabled then
+							button.Click:Fire(element, rect)
+						end
 					end,
 				})
 
+				table.insert(self.Buttons, button)
+				self.ButtonCreated:Fire(button)
 				return button
 			end
 
@@ -1660,10 +1804,13 @@ Plugin.InitRenderer = function(renderer, renderer_signal, game)
 		local function normalizeDockWidgetConfig(pluginGuiId, dockInfo)
 			local config = copyTable(dockInfo or {})
 			local width, height = getSizePair(config.FloatingSize or config.InitialSize or config.Size, 360, 260)
+			width = config.FloatingXSize or width
+			height = config.FloatingYSize or height
 			local x = config.x or config.X or 80
 			local y = config.y or config.Y or 80
 
 			return {
+				className = "DockWidgetPluginGui",
 				id = pluginGuiId,
 				pluginGuiId = pluginGuiId,
 				title = config.Title or config.Name or tostring(pluginGuiId),
@@ -1698,7 +1845,7 @@ Plugin.InitRenderer = function(renderer, renderer_signal, game)
 			return createRawWidget(widgetType, config)
 		end
 
-		function Plugin:CreateAereonWidget(widgetType, config)
+		function Plugin:CreateArgonWidget(widgetType, config)
 			return createRawWidget(widgetType, config)
 		end
 
@@ -1706,12 +1853,18 @@ Plugin.InitRenderer = function(renderer, renderer_signal, game)
 			return createRawWidget(widgetType, config)
 		end
 
-		function Plugin:SpawnAereonWidget(widgetType, config)
+		function Plugin:SpawnArgonWidget(widgetType, config)
 			return createRawWidget(widgetType, config)
 		end
 
 		function Plugin:CreateWidgetTree(structure)
-			return aereon.create(normalizeCreationStructure(structure))
+			local tree = {}
+			for name, widgetConfig in pairs(normalizeCreationStructure(structure)) do
+				if widgetConfig.comp then
+					tree[name] = createRawWidget(widgetConfig.comp, widgetConfig)
+				end
+			end
+			return tree
 		end
 
 		function Plugin:GetAvailableWidgets()
@@ -1737,25 +1890,73 @@ Plugin.InitRenderer = function(renderer, renderer_signal, game)
 		Plugin.Unloading = signal.new()
 		Plugin.Deactivation = signal.new()
 
-		function Plugin:Activate(exclusiveMouse) end
-
-		function Plugin:CreateDockWidgetPluginGuiAsync(pluginGuiId, dockWidgetpluginGuiInfo)
-			return nil
+		function Plugin:Activate(wantsExclusiveMouse)
+			activated = true
+			exclusiveMouse = wantsExclusiveMouse == true
 		end
 
-		function Plugin:GetSetting(value)
-			return true
+		function Plugin:CreateDockWidgetPluginGuiAsync(pluginGuiId, dockWidgetpluginGuiInfo)
+			return createWindowHandle(normalizeDockWidgetConfig(pluginGuiId, dockWidgetpluginGuiInfo))
+		end
+
+		function Plugin:GetSetting(key)
+			return settings[key]
 		end
 
 		function Plugin:CreatePluginAction(actionId, text, statusTip, iconName, allowBinding)
-			return { Triggered = signal.new() }
+			local action = Instance.new("PluginAction")
+			action.ActionId = actionId
+			action.Text = text
+			action.StatusTip = statusTip
+			action.Icon = iconName
+			action.AllowBinding = allowBinding ~= false
+			action.Triggered = signal.new()
+			return action
 		end
 
 		function Plugin:CreatePluginMenu(id, title, icon)
-			return nil
+			local menu = Instance.new("PluginMenu")
+			menu.Id = id
+			menu.Title = title or id
+			menu.Icon = icon
+			menu.Items = {}
+
+			function menu:AddAction(action)
+				table.insert(self.Items, action)
+				return action
+			end
+
+			function menu:AddNewAction(actionId, actionText, actionIcon)
+				return self:AddAction(Plugin:CreatePluginAction(actionId, actionText, "", actionIcon, true))
+			end
+
+			function menu:AddMenu(submenu)
+				table.insert(self.Items, submenu)
+				return submenu
+			end
+
+			function menu:AddSeparator()
+				table.insert(self.Items, { Separator = true })
+			end
+
+			function menu:Clear()
+				table.clear(self.Items)
+			end
+
+			function menu:ShowAsync()
+				return nil
+			end
+
+			return menu
 		end
 
-		function Plugin:Deactivate() end
+		function Plugin:Deactivate()
+			if activated then
+				activated = false
+				exclusiveMouse = false
+				Plugin.Deactivation:Fire()
+			end
+		end
 
 		function Plugin:GetJoinMode()
 			return nil
@@ -1794,11 +1995,11 @@ Plugin.InitRenderer = function(renderer, renderer_signal, game)
 		end
 
 		function Plugin:IsActivated()
-			return false
+			return activated
 		end
 
 		function Plugin:IsActivatedWithExclusiveMouse()
-			return false
+			return activated and exclusiveMouse
 		end
 
 		function Plugin:Negate(objects)
@@ -1833,7 +2034,9 @@ Plugin.InitRenderer = function(renderer, renderer_signal, game)
 			return {}
 		end
 
-		function Plugin:SetSetting(key, value) end
+		function Plugin:SetSetting(key, value)
+			settings[key] = value
+		end
 
 		function Plugin:StartDrag(dragData) end
 
@@ -1849,12 +2052,11 @@ Plugin.InitRenderer = function(renderer, renderer_signal, game)
 			if not game.GetService then
 				return
 			end
-			local dt = lib.GetFrameTime()
+			local dt = 1 / 60
 
 			local StudioThemeService = game:GetService("StudioThemeService")
 			if StudioThemeService then
-				window.update(dt, StudioThemeService.SelectedTheme.aereon)
-				window.draw(dt, StudioThemeService.SelectedTheme, renderer.Lib2d)
+				window.draw(dt, StudioThemeService.SelectedTheme)
 			end
 
 			for _, data in pairs(windowList) do

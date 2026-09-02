@@ -9,6 +9,21 @@ local DRAW_ITEM_SIZE = DrawItem:size()
 local DRAW_CAST_SHADOWS = 1
 local DRAW_RECEIVE_SHADOWS = 2
 local DRAW_CULLING = 4
+
+local function readCString(pointer, maxLength: number?): string
+	if not pointer or pointer == zune.ffi.null then
+		return ""
+	end
+	local bytes = {}
+	for index = 0, (maxLength or 4096) - 1 do
+		local byte = pointer:readu8(index)
+		if byte == 0 then
+			break
+		end
+		bytes[#bytes + 1] = string.char(byte)
+	end
+	return table.concat(bytes)
+end
 local drawListBuffers: { [any]: any } = setmetatable({}, { __mode = "k" })
 local indexBuffers: { [any]: any } = setmetatable({}, { __mode = "k" })
 local transformBuffers: { [any]: any } = setmetatable({}, { __mode = "k" })
@@ -92,6 +107,10 @@ local function writeTransform(items, transformOffset: number, rawMatrix, cframe,
 
 	local position = cframe.Position
 	local rotation = cframe.Rotation
+	-- The FFI array is written as four affine rows. The native shim explicitly
+	-- gathers indices 0/4/8/12, etc. into Filament's column vectors. Keep this
+	-- layout paired with kine_draw_item_transform; writing this as a flat
+	-- column-major array here would transpose the transform a second time.
 	items:writef32(transformOffset, rotation[1][1] * scale.X)
 	items:writef32(transformOffset + 4, rotation[1][2] * scale.Y)
 	items:writef32(transformOffset + 8, rotation[1][3] * scale.Z)
@@ -170,6 +189,43 @@ function filamentAdapter:Init(window: typedefs.Window)
 		return
 	end
 	filament.lib.Kine_Filament_CreateSky(window._3dhandle, 102 / 255, 191 / 255, 255 / 255, 1)
+end
+
+function filamentAdapter:CreateMaterialShader(window: typedefs.Window, source: string)
+	if not window or not window._3dhandle or window._3dhandle == zune.ffi.null then
+		return nil, "Filament is not initialized for this window"
+	end
+	local handle = filament.lib.Kine_Filament_Shader_Create(window._3dhandle, source)
+	if not handle or handle == zune.ffi.null then
+		return nil, readCString(filament.lib.Kine_Filament_Shader_GetLastError())
+	end
+	return handle
+end
+
+function filamentAdapter:DestroyMaterialShader(shader)
+	if shader and shader ~= zune.ffi.null then
+		filament.lib.Kine_Filament_Shader_Destroy(shader)
+	end
+end
+
+function filamentAdapter:SetMaterialShaderUniform(shader, name: string, values: { number })
+	if not shader or shader == zune.ffi.null or #values == 0 then
+		return false
+	end
+	local data = zune.ffi.alloc(#values * 4)
+	for index, value in ipairs(values) do
+		data:writef32((index - 1) * 4, value)
+	end
+	local result = filament.lib.Kine_Filament_Shader_SetUniform(shader, name, data, #values) ~= 0
+	zune.ffi.free(data)
+	return result
+end
+
+function filamentAdapter:SetGlobalMaterialShader(window: typedefs.Window, shader)
+	if not window or not window._3dhandle or window._3dhandle == zune.ffi.null then
+		return false
+	end
+	return filament.lib.Kine_Filament_SetGlobalShader(window._3dhandle, shader or zune.ffi.null) ~= 0
 end
 
 function filamentAdapter:GetVulkanCompositor(window: typedefs.Window)
@@ -1269,65 +1325,179 @@ end
 
 function filamentAdapter:SetPostProcessingPreset(window: typedefs.Window, preset: string)
 	local key = string.lower(preset)
+
 	if key == "off" then
 		self:ConfigurePostProcessing(window, {
 			Enabled = false,
+
 			Bloom = false,
 			AmbientOcclusion = false,
 			DepthOfField = false,
 			Vignette = false,
 			ScreenSpaceReflections = false,
 			SunRays = false,
-			ColorGrading = { Enabled = false },
+			Shadows = false,
+
+			ColorGrading = {
+				Enabled = false,
+			},
 		})
-	elseif key == "performance" then
+	elseif key == "low" then
 		self:ConfigurePostProcessing(window, {
 			Enabled = true,
+
 			Bloom = false,
+
 			AmbientOcclusion = true,
-			AmbientOcclusionOptions = { Quality = "low", Radius = 0.3, Intensity = 0.7 },
-			AntiAliasing = { FXAA = true, TAA = false, MSAA = false },
+			AmbientOcclusionOptions = {
+				Quality = "low",
+				Radius = 0.3,
+				Intensity = 0.7,
+			},
+
+			AntiAliasing = {
+				FXAA = true,
+				TAA = false,
+				MSAA = false,
+			},
+
 			RenderQuality = "medium",
 			Dithering = true,
+
 			SunRays = false,
-			SunShadows = { MapSize = 2048, Cascades = 3, ShadowFarHint = 120, Stable = true },
-		})
-	elseif key == "cinematic" then
-		self:ConfigurePostProcessing(window, {
-			Enabled = true,
-			Bloom = true,
-			BloomOptions = { Strength = 0.18, Resolution = 512, Levels = 7, Threshold = true, LensFlare = true },
-			AmbientOcclusion = true,
-			AmbientOcclusionOptions = { Type = "gtao", Quality = "high", Radius = 0.55, Power = 1.35, Intensity = 1.15 },
-			AntiAliasing = { FXAA = true, TAA = true, MSAA = true, SampleCount = 4 },
-			Vignette = true,
-			VignetteOptions = { MidPoint = 0.45, Roundness = 0.65, Feather = 0.55 },
-			ColorGrading = { Exposure = 0, Contrast = 1.08, Saturation = 1.05, Vibrance = 1.08 },
-			RenderQuality = "high",
-			Dithering = true,
-			SunRays = true,
-			SunRaysOptions = { Density = 0.018, MaximumOpacity = 0.68, InScatteringSize = 28 },
-			Shadows = true,
-			ShadowType = "pcss",
-			SunShadows = { MapSize = 4096, Cascades = 4, ShadowFarHint = 180, Stable = true, ContactShadows = true },
-		})
-	else
-		self:ConfigurePostProcessing(window, {
-			Enabled = true,
-			Bloom = true,
-			BloomOptions = { Strength = 0.12, Resolution = 384, Levels = 6, Threshold = true },
-			AmbientOcclusion = true,
-			AmbientOcclusionOptions = { Quality = "medium", Radius = 0.4, Power = 1.1, Intensity = 1 },
-			AntiAliasing = { FXAA = true, TAA = true, MSAA = false },
-			ColorGrading = { Exposure = 0, Contrast = 1, Saturation = 1, Vibrance = 1 },
-			RenderQuality = "high",
-			Dithering = true,
-			SunRays = true,
-			SunRaysOptions = { Density = 0.014, MaximumOpacity = 0.58, InScatteringSize = 34 },
+
 			Shadows = true,
 			ShadowType = "pcf",
-			SunShadows = { MapSize = 4096, Cascades = 4, ShadowFarHint = 160, Stable = true, ContactShadows = true },
+
+			SunShadows = {
+				MapSize = 1024,
+				Cascades = 2,
+				ShadowFarHint = 100,
+				Stable = true,
+				ContactShadows = false,
+			},
 		})
+	elseif key == "medium" then
+		self:ConfigurePostProcessing(window, {
+			Enabled = true,
+
+			Bloom = true,
+			BloomOptions = {
+				Strength = 0.12,
+				Resolution = 384,
+				Levels = 6,
+				Threshold = true,
+			},
+
+			AmbientOcclusion = true,
+			AmbientOcclusionOptions = {
+				Type = "gtao",
+				Quality = "medium",
+				Radius = 0.4,
+				Power = 1.1,
+				Intensity = 1,
+			},
+
+			AntiAliasing = {
+				FXAA = true,
+				TAA = true,
+				MSAA = false,
+			},
+
+			Vignette = false,
+
+			ColorGrading = {
+				Enabled = true,
+				Exposure = 0,
+				Contrast = 1,
+				Saturation = 1,
+				Vibrance = 1,
+			},
+
+			RenderQuality = "high",
+			Dithering = true,
+
+			SunRays = true,
+			SunRaysOptions = {
+				Density = 0.014,
+				MaximumOpacity = 0.58,
+				InScatteringSize = 34,
+			},
+
+			Shadows = true,
+			ShadowType = "pcf",
+
+			SunShadows = {
+				MapSize = 2048,
+				Cascades = 3,
+				ShadowFarHint = 140,
+				Stable = true,
+				ContactShadows = true,
+			},
+		})
+	elseif key == "high" then
+		self:ConfigurePostProcessing(window, {
+			Enabled = true,
+
+			Bloom = true,
+			BloomOptions = {
+				Strength = 0.18,
+				Resolution = 512,
+				Levels = 7,
+				Threshold = true,
+				LensFlare = true,
+			},
+
+			AmbientOcclusion = true,
+			AmbientOcclusionOptions = {
+				Type = "gtao",
+				Quality = "high",
+				Radius = 0.55,
+				Power = 1.35,
+				Intensity = 1.15,
+			},
+
+			AntiAliasing = {
+				FXAA = true,
+				TAA = true,
+				MSAA = true,
+				SampleCount = 4,
+			},
+
+			Vignette = false,
+
+			ColorGrading = {
+				Enabled = true,
+				Exposure = 0,
+				Contrast = 1.08,
+				Saturation = 1.05,
+				Vibrance = 1.08,
+			},
+
+			RenderQuality = "high",
+			Dithering = true,
+
+			SunRays = true,
+			SunRaysOptions = {
+				Density = 0.018,
+				MaximumOpacity = 0.68,
+				InScatteringSize = 28,
+			},
+
+			Shadows = true,
+			ShadowType = "pcss",
+
+			SunShadows = {
+				MapSize = 4096,
+				Cascades = 4,
+				ShadowFarHint = 180,
+				Stable = true,
+				ContactShadows = true,
+			},
+		})
+	else
+		warn(`Unknown post-processing preset "{preset}", defaulting to Medium`)
+		self:SetPostProcessingPreset(window, "medium")
 	end
 end
 

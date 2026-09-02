@@ -1,5 +1,6 @@
 -- description: "Creates an anchor layout for UI elements."
 local Vector2 = require("@Vector2")
+local UILayout = require("@UILayout")
 
 -- UIAnchorLayout: each child declares its own anchor constraints via
 -- a UIAnchor modifier child, similar to CSS absolute positioning with
@@ -22,7 +23,7 @@ local propTable = {
 	Name = "UIAnchorLayout",
 	Enabled = true,
 
-	render = function(lib, object, dt, structs)
+	render = function(surface, object)
 		if not object.Enabled then
 			return
 		end
@@ -31,33 +32,11 @@ local propTable = {
 			return
 		end
 
-		local function GetAbsoluteSize(obj)
-			if obj.AbsoluteSize then
-				return obj.AbsoluteSize
-			end
-			if obj:IsA("ScreenGui") then
-				local dpiScale = lib.GetWindowScaleDPI()
-				return Vector2.new(lib.GetRenderWidth() / dpiScale.x, lib.GetRenderHeight() / dpiScale.y)
-			else
-				local parentSize = GetAbsoluteSize(obj.Parent)
-				return obj.Size:ToPixels(parentSize)
-			end
-		end
+		local parentSize = UILayout.GetAbsoluteSize(parent, surface)
 
-		local parentSize = GetAbsoluteSize(parent)
-
-		local totalPaddingX = 0
-		local totalPaddingY = 0
-		for _, child in ipairs(parent:GetChildren()) do
-			if child.ClassName == "UIPadding" then
-				local px = child.Padding:ToPixels(parentSize)
-				totalPaddingX = totalPaddingX + px.X
-				totalPaddingY = totalPaddingY + px.Y
-			end
-		end
-
-		local effectiveWidth = math.max(0, parentSize.X - totalPaddingX * 2)
-		local effectiveHeight = math.max(0, parentSize.Y - totalPaddingY * 2)
+		local totalPaddingX, paddingRight, totalPaddingY, paddingBottom = UILayout.GetPadding(parent, parentSize)
+		local effectiveWidth = math.max(0, parentSize.X - totalPaddingX - paddingRight)
+		local effectiveHeight = math.max(0, parentSize.Y - totalPaddingY - paddingBottom)
 		local effectiveSize = Vector2.new(effectiveWidth, effectiveHeight)
 
 		local function resolveUDim(udim, axis)
@@ -80,7 +59,7 @@ local propTable = {
 
 			rawset(child, "_LayoutControlled", true)
 
-			local childSize = child.Size:ToPixels(effectiveSize)
+			local childSize = UILayout.GetSize(child, effectiveSize)
 			local posX, posY, sizeX, sizeY
 
 			local left = resolveUDim(anchor.AnchorLeft, "x")
@@ -126,10 +105,7 @@ local propTable = {
 			end
 
 			rawset(child, "_LayoutRelativePosition", Vector2.new(posX, posY))
-
-			if sizeX ~= childSize.X or sizeY ~= childSize.Y then
-				rawset(child, "AbsoluteSize", Vector2.new(sizeX, sizeY))
-			end
+			rawset(child, "_LayoutRelativeSize", Vector2.new(sizeX, sizeY))
 		end
 	end,
 }

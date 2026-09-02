@@ -153,7 +153,15 @@ function assetsaver:ResolveFileEmbed(file)
 		local name = file:match("^kineasset://(.+)$")
 
 		if name then
-			return "./assets/game/" .. name
+			local gameAsset = "./assets/game/" .. name
+			local resolved = zembed.RuntimePath(gameAsset)
+			local ok, stat = pcall(fs.stat, resolved)
+			-- `kineasset://` is shared by engine assets and packaged game assets.
+			-- Rewrite only when the packaged-game copy really exists; otherwise an
+			-- engine URI such as meshes/roundedcube.gltf must remain intact.
+			if ok and stat and stat.kind == "file" then
+				return gameAsset
+			end
 		end
 	end
 

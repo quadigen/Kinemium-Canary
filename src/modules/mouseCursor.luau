@@ -1,4 +1,5 @@
 local Enum = require("@EnumMap")
+local Argon = require("@Argon")
 
 local MouseCursor = {}
 
@@ -39,7 +40,7 @@ end
 function MouseCursor.request(cursor)
 	if not cursorState.managed then
 		if cursorState.applied ~= cursor then
-			adapter.lib.SetMouseCursor(cursor)
+			Argon:SetMouseCursor(cursor)
 			cursorState.applied = cursor
 		end
 		return
@@ -59,7 +60,7 @@ function MouseCursor.commitFrame()
 
 	cursorState.managed = false
 	if cursorState.applied ~= cursorState.requested then
-		adapter.lib.SetMouseCursor(cursorState.requested)
+		Argon:SetMouseCursor(cursorState.requested)
 		cursorState.applied = cursorState.requested
 	end
 end

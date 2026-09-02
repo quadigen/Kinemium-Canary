@@ -206,9 +206,10 @@ local JPH_BroadPhaseCastResult = ffi.struct({
 export type JPH_BroadPhaseCastResult = typeof(JPH_BroadPhaseCastResult:new({}))
 
 local JPH_RayCastResult = ffi.struct({
+	{ position = JPH_RVec3 },
+	{ normal = JPH_Vec3 },
 	{ bodyID = ffi.types.u32 },
 	{ fraction = float },
-	{ subShapeID2 = ffi.types.u32 },
 })
 export type JPH_RayCastResult = typeof(JPH_RayCastResult:new({}))
 
@@ -388,12 +389,12 @@ local JPH_SixDOFConstraintSettings = ffi.struct({
 	{ position2 = JPH_RVec3 },
 	{ axisX2 = JPH_Vec3 },
 	{ axisY2 = JPH_Vec3 },
-	{ maxFriction = float },
+	{ maxFriction = float:array(6) },
 	{ swingType = ffi.types.u32 },
-	{ limitMin = float },
-	{ limitMax = float },
-	{ limitsSpringSettings = JPH_SpringSettings },
-	{ motorSettings = JPH_MotorSettings },
+	{ limitMin = float:array(6) },
+	{ limitMax = float:array(6) },
+	{ limitsSpringSettings = JPH_SpringSettings:array(3) },
+	{ motorSettings = JPH_MotorSettings:array(6) },
 })
 export type JPH_SixDOFConstraintSettings = typeof(JPH_SixDOFConstraintSettings:new({}))
 

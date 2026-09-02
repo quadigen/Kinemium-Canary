@@ -44,11 +44,14 @@ function datatypes:Init(datamodel, renderer, types)
 
 			local path = "./src/environment/datatypes/" .. moduleName .. ".luau"
 			local read = zune.fs.readFile(path)
-			local thread, success, result = kilang:execute(
+			local thread, success, result, _, getResult = kilang:execute(
 				read,
 				{ StackId = path },
 				{ game = datamodel, renderer = renderer }
 			)
+			if getResult then
+				success, result = getResult()
+			end
 
 			if not success then
 				warn("Failed to add datatype " .. path .. ": " .. result)

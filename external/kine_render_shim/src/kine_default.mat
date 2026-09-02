@@ -106,8 +106,13 @@ fragment {
         if (materialParams.hasOrmMap > 0.5) {
             vec3 orm = texture(materialParams_ormMap, uv).rgb;
             material.ambientOcclusion = orm.r;
-            roughness = orm.g;
-            metallic  = orm.b;
+            // ORM maps modulate the instance's surface controls. Treating the
+            // texture as an unconditional replacement made the legacy 1x1
+            // white fallback maps force every SmoothPlastic part to metallic
+            // 1.0. Without an environment reflection those dielectric parts
+            // consequently appeared black, which looked like inverted faces.
+            roughness *= orm.g;
+            metallic  *= orm.b;
         }
 
         material.baseColor = color;

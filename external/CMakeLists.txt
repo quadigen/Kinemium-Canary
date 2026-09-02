@@ -115,7 +115,31 @@ file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/kinemium_libs.c" "void kinemium_libs_anc
 
 add_library(KinemiumLibs SHARED
     "${CMAKE_CURRENT_BINARY_DIR}/kinemium_libs.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/kine_box2d_shim.cpp"
 )
+target_compile_features(KinemiumLibs PRIVATE cxx_std_20)
+
+# Standalone Ninja builds do not always inherit INCLUDE from a Visual Studio
+# developer shell. Box2D's public C header includes stdbool.h, so make the
+# active MSVC toolset headers explicit for the small C++ bridge.
+if(MSVC)
+    get_filename_component(KINE_MSVC_COMPILER_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    get_filename_component(KINE_MSVC_INCLUDE_DIR "${KINE_MSVC_COMPILER_DIR}/../../../include" ABSOLUTE)
+    get_filename_component(KINE_MSVC_LIBRARY_DIR "${KINE_MSVC_COMPILER_DIR}/../../../lib/x64" ABSOLUTE)
+    target_include_directories(KinemiumLibs PRIVATE "${KINE_MSVC_INCLUDE_DIR}")
+    file(GLOB KINE_WINDOWS_UCRT_DIRS "C:/Program Files (x86)/Windows Kits/10/Include/*/ucrt")
+    list(SORT KINE_WINDOWS_UCRT_DIRS ORDER DESCENDING)
+    list(GET KINE_WINDOWS_UCRT_DIRS 0 KINE_WINDOWS_UCRT_DIR)
+    target_include_directories(KinemiumLibs PRIVATE "${KINE_WINDOWS_UCRT_DIR}")
+    file(GLOB KINE_WINDOWS_LIBRARY_ROOTS "C:/Program Files (x86)/Windows Kits/10/Lib/*")
+    list(SORT KINE_WINDOWS_LIBRARY_ROOTS ORDER DESCENDING)
+    list(GET KINE_WINDOWS_LIBRARY_ROOTS 0 KINE_WINDOWS_LIBRARY_ROOT)
+    target_link_directories(KinemiumLibs PRIVATE
+        "${KINE_MSVC_LIBRARY_DIR}"
+        "${KINE_WINDOWS_LIBRARY_ROOT}/ucrt/x64"
+        "${KINE_WINDOWS_LIBRARY_ROOT}/um/x64"
+    )
+endif()
 
 if(WIN32)
     set(KINE_MANIFOLD_C_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/manifold/bindings/c/include/manifold/manifoldc.h")

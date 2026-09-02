@@ -1,11 +1,14 @@
 -- description: "A constraint that welds two parts together."
 local a = require("@NetworkOwnership")
+local ConstraintVisualizer = require("@ConstraintVisualizer")
+local ConstraintRetry = require("@ConstraintRetry")
 
 local b = {
 	Part0 = nil,
 	Part1 = nil,
 
 	Enabled = true,
+	Visible = true,
 	Name = "Weld",
 	ElapsedTime = 0,
 }
@@ -19,11 +22,9 @@ return {
 		c:SetProperties(b)
 
 		local function rebuild()
+			ConstraintRetry.Cancel(c)
 			if c._active then
-				local g = f.jolt
-				if g and g.lib and g.physicsSystem then
-					g.lib.JPH_PhysicsSystem_RemoveConstraint(g.physicsSystem, c._active)
-				end
+				f.RemoveConstraint(c._active)
 				c._active = nil
 			end
 
@@ -55,7 +56,7 @@ return {
 				else
 					g += 1
 					if g < 30 then
-						task.defer(tryCreate)
+						ConstraintRetry.Schedule(c, tryCreate)
 					else
 						warn("[Weld] Gave up waiting for physics bodies for", c.Name)
 					end
@@ -67,9 +68,13 @@ return {
 
 		c.Changed:Connect(function(g)
 			if g == "Part0" or g == "Part1" or g == "Enabled" then
-				rebuild()
+				ConstraintRetry.Schedule(c, rebuild, 0)
 			end
 		end)
+		a.ObserveConstraint(c, function()
+			ConstraintRetry.Schedule(c, rebuild, 0)
+		end)
+		ConstraintVisualizer.Attach(c, d)
 
 		return c
 	end,

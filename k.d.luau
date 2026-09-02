@@ -1843,6 +1843,14 @@ export type EditableImage = Instance & {
 	Size: Vector2,
 	Name: string,
 	BaseClass: string,
+	DrawCircle: (self: EditableImage, center: Vector2, radius: number, color: Color3, transparency: number?) -> (),
+	DrawRectangle: (self: EditableImage, position: Vector2, size: Vector2, color: Color3, transparency: number?) -> (),
+	DrawLine: (self: EditableImage, from: Vector2, to: Vector2, color: Color3, transparency: number?) -> (),
+	ReadPixelsBuffer: (self: EditableImage, position: Vector2, size: Vector2) -> buffer,
+	WritePixelsBuffer: (self: EditableImage, position: Vector2, size: Vector2, data: buffer) -> (),
+	GetPixelColor: (self: EditableImage, position: Vector2) -> Color3,
+	SetPixelColor: (self: EditableImage, position: Vector2, color: Color3, transparency: number?) -> (),
+	Clear: (self: EditableImage, color: Color3, transparency: number?) -> (),
 }
 
 export type EditableMesh = Instance & {
@@ -2147,6 +2155,7 @@ export type LocalScript = Instance & {
 
 export type MeshPart = Instance & {
 	MeshObject: any,
+	MeshId: string,
 	_showhitbox: boolean,
 	CollisionScale: number,
 	Name: string,
@@ -2250,6 +2259,7 @@ export type Part = Instance & {
 	Anchored: boolean,
 	NeonEnergy: number,
 	CanCollide: boolean,
+	CanQuery: boolean,
 	CollisionGroup: string,
 	Velocity: Vector3,
 	MeshScale: number,
@@ -2431,6 +2441,15 @@ export type ProximityPrompt = Instance & {
 	RootLocalizationTable: any,
 	Style: any,
 	UIOffset: Vector2,
+	Triggered: Signal,
+	TriggerEnded: Signal,
+	PromptButtonHoldBegan: Signal,
+	PromptButtonHoldEnded: Signal,
+	PromptHidden: Signal,
+	PromptShown: Signal,
+	Trigger: (self: ProximityPrompt) -> boolean,
+	InputHoldBegin: (self: ProximityPrompt) -> boolean,
+	InputHoldEnd: (self: ProximityPrompt) -> boolean,
 }
 
 export type UIRadioButton = Instance & {
@@ -2450,12 +2469,28 @@ export type RayValue = Instance & {
 }
 
 export type RemoteData = Instance & {
+	Data: any,
+	DataChanged: Signal,
+	LastWriter: Player?,
+	GetData: (self: RemoteData) -> any,
+	SetData: (self: RemoteData, value: any) -> boolean,
 }
 
 export type RemoteEvent = Instance & {
+	OnClientEvent: Signal,
+	OnServerEvent: Signal,
+	Fire: (self: RemoteEvent, player: Player, ...any) -> boolean,
+	FireServer: (self: RemoteEvent, ...any) -> boolean,
+	FireClient: (self: RemoteEvent, player: Player, ...any) -> boolean,
+	FireAllClients: (self: RemoteEvent, ...any) -> boolean,
 }
 
 export type RemoteFunction = Instance & {
+	OnClientInvoke: ((...any) -> ...any)?,
+	OnServerInvoke: ((player: Player, ...any) -> ...any)?,
+	InvokeTimeout: number,
+	InvokeServer: (self: RemoteFunction, ...any) -> ...any,
+	InvokeClient: (self: RemoteFunction, player: Player, ...any) -> ...any,
 }
 
 export type RigidConstraint = Instance & {
@@ -3501,6 +3536,12 @@ export type UniversalConstraint = Instance & {
 }
 
 export type UnreliableRemoteEvent = Instance & {
+	OnClientEvent: Signal,
+	OnServerEvent: Signal,
+	Fire: (self: UnreliableRemoteEvent, player: Player, ...any) -> boolean,
+	FireServer: (self: UnreliableRemoteEvent, ...any) -> boolean,
+	FireClient: (self: UnreliableRemoteEvent, player: Player, ...any) -> boolean,
+	FireAllClients: (self: UnreliableRemoteEvent, ...any) -> boolean,
 }
 
 export type ValueBase = Instance & {
@@ -3760,6 +3801,9 @@ export type KineFileService = Instance & {
 	ExportObject: (self: KineFileService, instances: any, path: any, name: any) -> any,
 	ExportDatamodel: (self: KineFileService, path: any, name: any) -> any,
 	ExportGameAsFile: (self: KineFileService, path: any, gameName: string) -> any,
+	ExportAsClient: (self: KineFileService, gameName: string, outputDirectory: string?, options: any?) -> any,
+	ExportAsServer: (self: KineFileService, gameName: string, outputDirectory: string?, options: any?) -> any,
+	ExportGameAsExecutable: (self: KineFileService, gameName: string, outputDirectory: string?, options: any?) -> any,
 	DecodeFile: (self: KineFileService, filePath: any) -> boolean,
 }
 
@@ -4252,6 +4296,7 @@ export type WebviewService = Instance & {
 
 export type Workspace = Instance & {
 	InitRenderer: (self: Workspace, renderer: any, signal: any, game: any) -> any,
+	Raycast: (self: Workspace, origin: Vector3, direction: Vector3, params: RaycastParams?) -> RaycastResult?,
 }
 
 type _Instance_Module = {
@@ -4768,6 +4813,11 @@ type RayModule = {
 
 --[[ RaycastParams ]]
 type RaycastParams = {
+	FilterDescendantsInstances: { Instance },
+	FilterType: any,
+	IgnoreWater: boolean,
+	CollisionGroup: string,
+	RespectCanCollide: boolean,
 	AddToFilter: (self: RaycastParams, instances: any) -> any,
 	ToTable: (self: RaycastParams) -> { [string]: any },
 }
@@ -4779,6 +4829,11 @@ type RaycastParamsModule = {
 
 --[[ RaycastResult ]]
 type RaycastResult = {
+	Instance: Instance,
+	Position: Vector3,
+	Normal: Vector3,
+	Material: any,
+	Distance: number,
 	ToTable: (self: RaycastResult) -> { [string]: any },
 }
 

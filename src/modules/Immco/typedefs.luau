@@ -53,6 +53,226 @@ export type TableParams = {
 	OnCellClicked: ((row: number, col: number, value: any) -> ())?,
 }
 
+export type BreadcrumbItem = {
+	Text: string,
+	Current: boolean?,
+	Disabled: boolean?,
+	OnClick: (() -> ())?,
+}
+
+export type BreadcrumbParams = {
+	x: number,
+	y: number,
+	height: number?,
+
+	engine_window: any,
+	renderer: any,
+	theme: any,
+
+	Items: { BreadcrumbItem },
+
+	TextSize: number?,
+	Font: string?,
+	TextShadow: boolean?,
+
+	ShadowColor: RGBA?,
+	ShadowOffsetX: number?,
+	ShadowOffsetY: number?,
+
+	ShadowBlur: number?,
+	ShadowSpread: number?,
+
+	Gap: number?,
+	Separator: string?,
+
+	Collapsed: boolean?,
+	Ellipsis: string?,
+	OnEllipsisClick: ((hiddenItems: { BreadcrumbItem }) -> ())?,
+
+	LinkColor: RGBA?,
+	HoverColor: RGBA?,
+	PageColor: RGBA?,
+	SeparatorColor: RGBA?,
+}
+
+export type TabItem = {
+	Value: string,
+	Text: string?,
+
+	Icon: Image?,
+	Count: number?,
+
+	Width: number?,
+	Height: number?,
+
+	Disabled: boolean?,
+
+	CountColor: RGBA?,
+
+	Content: ((params: any, dt: number) -> ())?,
+}
+
+export type TabsParams = {
+	x: number,
+	y: number,
+
+	width: number?,
+	height: number?,
+
+	engine_window: any,
+	renderer: any,
+	theme: any,
+
+	RetainedStorage: { [any]: any }?,
+	id: any?,
+
+	Items: { TabItem },
+
+	Orientation: ("horizontal" | "vertical")?,
+	Variant: ("filled" | "underline")?,
+
+	Value: string?,
+	DefaultValue: string?,
+
+	OnChange: ((value: string) -> ())?,
+
+	TextSize: number?,
+	Font: string?,
+
+	TabWidth: number?,
+	TabHeight: number?,
+
+	PaddingX: number?,
+	Gap: number?,
+
+	IconSize: number?,
+	IconGap: number?,
+	CountGap: number?,
+
+	CornerRadius: number?,
+	ActiveInset: number?,
+
+	BackgroundColor: RGBA?,
+	ActiveColor: RGBA?,
+	HoverColor: RGBA?,
+
+	TextColor: RGBA?,
+	ActiveTextColor: RGBA?,
+	DisabledTextColor: RGBA?,
+
+	CountColor: RGBA?,
+
+	IndicatorColor: RGBA?,
+	IndicatorThickness: number?,
+
+	Animated: boolean?,
+	AnimationSpeed: number?,
+
+	RenderContent: boolean?,
+
+	ContentGap: number?,
+	ContentWidth: number?,
+	ContentHeight: number?,
+}
+
+export type KbdParams = {
+	x: number,
+	y: number,
+
+	width: number?,
+	height: number?,
+
+	engine_window: any,
+	theme: any,
+
+	Text: string?,
+
+	Size: ("xs" | "sm" | "md" | "lg" | "xl")?,
+
+	TextSize: number?,
+	Font: string?,
+
+	PaddingX: number?,
+	CornerRadius: number?,
+
+	BorderThickness: number?,
+	BottomBorderExtra: number?,
+
+	BackgroundColor: RGBA?,
+	BorderColor: RGBA?,
+	TextColor: RGBA?,
+}
+
+export type ButtonGroupItem = {
+	Type: ("Button" | "Text" | "Separator")?,
+
+	Text: string?,
+
+	Icon: Image?,
+	IconSize: number?,
+	IconPosition: ("left" | "right")?,
+
+	Width: number?,
+	Height: number?,
+
+	Disabled: boolean?,
+	OnClick: (() -> ())?,
+
+	Color: RGBA?,
+	HoverColor: RGBA?,
+	PressedColor: RGBA?,
+
+	TextColor: RGBA?,
+	DisabledTextColor: RGBA?,
+
+	Thickness: number?,
+}
+
+export type ButtonGroupParams = {
+	x: number,
+	y: number,
+
+	width: number?,
+	height: number?,
+
+	engine_window: any,
+	renderer: any,
+	theme: any,
+
+	Items: { ButtonGroupItem },
+
+	Orientation: ("horizontal" | "vertical")?,
+
+	TextSize: number?,
+	Font: string?,
+
+	ItemHeight: number?,
+	PaddingX: number?,
+
+	IconSize: number?,
+	IconGap: number?,
+
+	CornerRadius: number?,
+
+	BackgroundColor: RGBA?,
+	ButtonColor: RGBA?,
+	HoverColor: RGBA?,
+	PressedColor: RGBA?,
+
+	TextColor: RGBA?,
+	MutedTextColor: RGBA?,
+
+	BorderColor: RGBA?,
+	DividerColor: RGBA?,
+
+	SeparatorColor: RGBA?,
+	SeparatorThickness: number?,
+	SeparatorInset: number?,
+
+	ShowBorder: boolean?,
+	ShowDividers: boolean?,
+}
+
 export type WidgetParams = {
 	engine_window: any,
 	x: number,
@@ -60,6 +280,10 @@ export type WidgetParams = {
 	width: number,
 	height: number,
 	theme: Theme,
+	title: string?,
+	tabs: { { title: string } }?,
+	activeTab: number?,
+	OnTabChanged: ((index: number, tab: { title: string }) -> ())?,
 	callback: () -> ()?,
 }
 
@@ -174,5 +398,6 @@ export type ImageButtonParams = {
 }
 
 export type TextButtonParams = WidgetParams & TextParams
+export type ImageTextButtonParams = ImageButtonParams & TextButtonParams
 
 return {}

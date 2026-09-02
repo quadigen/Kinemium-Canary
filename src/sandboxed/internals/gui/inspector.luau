@@ -132,8 +132,8 @@ local adapters = {
 						A = 1,
 					},
 
-					TextColor = { R = 1, G = 1, B = 1, A = 1 },
-					PlaceholderColor = { R = 0.5, G = 0.5, B = 0.5, A = 1 },
+					TextColor = theme.InputTextColor,
+					PlaceholderColor = theme.InputPlaceholderColor,
 
 					placeholder = string.format("%.2f", color[component]),
 
@@ -201,8 +201,8 @@ local adapters = {
 					A = 1,
 				},
 
-				TextColor = { R = 1, G = 1, B = 1, A = 1 },
-				PlaceholderColor = { R = 0.5, G = 0.5, B = 0.5, A = 1 },
+				TextColor = theme.InputTextColor,
+				PlaceholderColor = theme.InputPlaceholderColor,
 
 				placeholder = string.format("%.2f", time),
 
@@ -267,9 +267,9 @@ local adapters = {
 			theme = theme,
 			ReadOnly = readonly[prop.name] ~= nil,
 			Color = { R = 0.15, G = 0.15, B = 0.15, A = 1 },
-			FocusColor = { R = 0.2, G = 0.2, B = 0.25, A = 1 },
-			TextColor = { R = 1, G = 1, B = 1, A = 1 },
-			PlaceholderColor = { R = 0.5, G = 0.5, B = 0.5, A = 1 },
+			FocusColor = theme.InputFocusColor,
+			TextColor = theme.InputTextColor,
+			PlaceholderColor = theme.InputPlaceholderColor,
 			placeholder = tostring(prop.value),
 			OnSubmit = function(text)
 				firstObj[prop.name] = text
@@ -290,9 +290,9 @@ local adapters = {
 			theme = theme,
 			ReadOnly = readonly[prop.name] ~= nil,
 			Color = { R = 0.15, G = 0.15, B = 0.15, A = 1 },
-			FocusColor = { R = 0.2, G = 0.2, B = 0.25, A = 1 },
-			TextColor = { R = 1, G = 1, B = 1, A = 1 },
-			PlaceholderColor = { R = 0.5, G = 0.5, B = 0.5, A = 1 },
+			FocusColor = theme.InputFocusColor,
+			TextColor = theme.InputTextColor,
+			PlaceholderColor = theme.InputPlaceholderColor,
 			placeholder = tostring(prop.value),
 			OnSubmit = function(text)
 				firstObj[prop.name] = tonumber(text)
@@ -331,8 +331,8 @@ local adapters = {
 					A = 1,
 				},
 
-				TextColor = { R = 1, G = 1, B = 1, A = 1 },
-				PlaceholderColor = { R = 0.5, G = 0.5, B = 0.5, A = 1 },
+				TextColor = theme.InputTextColor,
+				PlaceholderColor = theme.InputPlaceholderColor,
 
 				placeholder = tostring(value[component]),
 
@@ -390,8 +390,8 @@ local adapters = {
 					A = 1,
 				},
 
-				TextColor = { R = 1, G = 1, B = 1, A = 1 },
-				PlaceholderColor = { R = 0.5, G = 0.5, B = 0.5, A = 1 },
+				TextColor = theme.InputTextColor,
+				PlaceholderColor = theme.InputPlaceholderColor,
 
 				placeholder = tostring(udim.Scale) .. ", " .. tostring(udim.Offset),
 
@@ -461,8 +461,8 @@ local adapters = {
 					A = 1,
 				},
 
-				TextColor = { R = 1, G = 1, B = 1, A = 1 },
-				PlaceholderColor = { R = 0.5, G = 0.5, B = 0.5, A = 1 },
+				TextColor = theme.InputTextColor,
+				PlaceholderColor = theme.InputPlaceholderColor,
 
 				placeholder = tostring(value[component]),
 
@@ -547,6 +547,8 @@ renderer.Pool.new("2d", function()
 		title = "Inspector",
 		theme = theme,
 		engine_window = renderer.Window,
+		renderer = renderer,
+
 		callback = function(params)
 			Immco.Scroller({
 				id = "main-explorer",
@@ -579,9 +581,9 @@ renderer.Pool.new("2d", function()
 						theme = theme,
 
 						Color = { R = 0.15, G = 0.15, B = 0.15, A = 1 },
-						FocusColor = { R = 0.2, G = 0.2, B = 0.25, A = 1 },
+						FocusColor = theme.InputFocusColor,
 						TextColor = theme.TextColor,
-						PlaceholderColor = { R = 0.5, G = 0.5, B = 0.5, A = 1 },
+						PlaceholderColor = theme.InputPlaceholderColor,
 
 						placeholder = "Search Properties..",
 						OnSubmit = function(text) end,
@@ -680,7 +682,7 @@ renderer.Pool.new("2d", function()
 							y = groupTop,
 							width = width,
 							height = headerHeight,
-							Color = Argon:RGBA(33, 33, 33),
+							Color = theme.AlternatingColor2,
 							isOutline = true,
 						})
 
@@ -689,7 +691,7 @@ renderer.Pool.new("2d", function()
 							y = groupTop,
 							width = width,
 							height = headerHeight,
-							Color = Argon:RGBA(45, 45, 45),
+							Color = theme.AlternatingColor1,
 						})
 
 						Argon:Restore(renderer.Window)

@@ -4,13 +4,15 @@ local UDim2 = require("@UDim2")
 local Vector2 = require("@Vector2")
 local Enum = require("@EnumMap")
 local StudioTheme = require("@StudioTheme")
+local signal = require("@Kinemium.signal")
+local argon = require("@Argon")
 
 local StudioThemeService = Instance.new("StudioThemeService")
 StudioThemeService.ExplorerHidden = true
 StudioThemeService._Intents = Enum.PluginIntents.UI
+StudioThemeService.ThemeChanged = signal.new()
 
 StudioThemeService.InitRenderer = function(renderer, renderer_signal, datamodel)
-	local argon = require("@argon")
 	local P = 4
 	local TopH = 33
 	local BottomPad = 12
@@ -71,8 +73,16 @@ StudioThemeService.InitRenderer = function(renderer, renderer_signal, datamodel)
 		ThirdColor = argon:RGBA(25, 25, 25),
 		SecondaryTextColor = argon:RGBA(180, 180, 180),
 		TextColor = argon:RGBA(220, 220, 220),
+		TextColorDimmed = argon:RGBA(0, 0, 0),
 		CornerRadius = 4,
 		ButtonCornerRadius = 8,
+		InputColor = argon:RGBA(38, 38, 38),
+		InputFocusColor = argon:RGBA(51, 51, 64),
+		InputTextColor = argon:RGBA(255, 255, 255),
+		InputPlaceholderColor = argon:RGBA(128, 128, 128),
+		AlternatingColor1 = argon:RGBA(50, 50, 50),
+		AlternatingColor2 = argon:RGBA(45, 45, 45),
+		CodeEditorBgColor = argon:RGBA(0, 0, 0, 0.8),
 		Font = "./src/assets/fonts/Montserrat-Regular.ttf",
 		FontBold = "./src/assets/fonts/Montserrat-Regular.ttf",
 
@@ -124,7 +134,7 @@ StudioThemeService.InitRenderer = function(renderer, renderer_signal, datamodel)
 	function StudioThemeService:ChangeLayoutSettings(padding, headerHeight, bottomPadding)
 		P = padding or P
 		TopH = headerHeight or TopH
-		bottomPadding = BottomPad or bottomPadding
+		BottomPad = bottomPadding or BottomPad
 
 		default.TopbarCoordinates = {
 			Size = UDim2.new(1, -P * 2, 0, TopH),
@@ -155,6 +165,18 @@ StudioThemeService.InitRenderer = function(renderer, renderer_signal, datamodel)
 	local themeObject = Instance.new("StudioTheme")
 	StudioTheme.callback(themeObject)
 
+	local function toColor3(color)
+		return Color3.new(color.R or 0, color.G or 0, color.B or 0)
+	end
+
+	themeObject:SetColor("MainBackground", toColor3(default.BgColor))
+	themeObject:SetColor("Titlebar", toColor3(default.ThirdColor))
+	themeObject:SetColor("Button", toColor3(default.SecondaryColor))
+	themeObject:SetColor("MainButton", toColor3(default.AccentColor))
+	themeObject:SetColor("MainText", toColor3(default.TextColor))
+	themeObject:SetColor("SubText", toColor3(default.SecondaryTextColor))
+	themeObject:SetColor("InputFieldBackground", toColor3(default.InputColor))
+
 	StudioThemeService:SetProperties({
 		SelectedTheme = default,
 		ThemeObject = themeObject,
@@ -162,6 +184,19 @@ StudioThemeService.InitRenderer = function(renderer, renderer_signal, datamodel)
 
 	function StudioThemeService:GetTheme()
 		return default
+	end
+
+	function StudioThemeService:SetTheme(theme, robloxTheme)
+		if type(theme) ~= "table" then
+			error("StudioThemeService:SetTheme expects an Argon theme table")
+		end
+		default = theme
+		self.SelectedTheme = theme
+		if robloxTheme then
+			themeObject = robloxTheme
+			self.ThemeObject = robloxTheme
+		end
+		self.ThemeChanged:Fire(themeObject)
 	end
 
 	function StudioThemeService.MakeUIPadded()
@@ -275,7 +310,7 @@ StudioThemeService.InitRenderer = function(renderer, renderer_signal, datamodel)
 			return result
 		end
 
-		local jsonCompat = serialize(themes.dark)
+		local jsonCompat = serialize(default)
 		local encoded = zune.serde.json.encode(jsonCompat)
 
 		zune.fs.writeFile("./src/theme.json", encoded)
@@ -283,7 +318,17 @@ StudioThemeService.InitRenderer = function(renderer, renderer_signal, datamodel)
 		return encoded
 	end
 
-	function StudioThemeService:LoadThemeJson(theme) end
+	function StudioThemeService:LoadThemeJson(theme)
+		local decoded = type(theme) == "string" and zune.serde.json.decode(theme) or theme
+		if type(decoded) ~= "table" then
+			error("StudioThemeService:LoadThemeJson expects JSON or a theme table")
+		end
+		for key, value in pairs(decoded) do
+			default[key] = value
+		end
+		self.ThemeChanged:Fire(themeObject)
+		return default
+	end
 
 	StudioThemeService.MakeUIBoxed()
 end

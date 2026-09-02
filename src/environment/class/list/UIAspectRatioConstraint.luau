@@ -1,19 +1,19 @@
 -- description: "A constraint that maintains a specific aspect ratio for a UI element."
+local Enum = require("@EnumMap")
+
 local propTable = {
 	Name = "UIAspectRatioConstraint",
 	BaseClass = "Kinemium.uimodifier",
 
 	AspectRatio = 1,
-	AspectType = 1,
-	DominantAxis = 1,
+	AspectType = Enum.AspectType.ScaleWithParentSize,
+	DominantAxis = Enum.DominantAxis.Width,
 }
 
 return {
 	class = "UIAspectRatioConstraint",
 	callback = function(instance)
 		instance:SetProperties(propTable)
-
-		-- TODO: Implement functionality, same as other ui layout items
 
 		return instance
 	end,

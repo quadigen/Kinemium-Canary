@@ -21,6 +21,7 @@ extern "C" {
 typedef struct KineSkiaSurface KineSkiaSurface;
 typedef struct KineSkiaImage KineSkiaImage;
 typedef struct KineSkiaVulkanContext KineSkiaVulkanContext;
+typedef struct KineSkiaRuntimeShader KineSkiaRuntimeShader;
 
 typedef struct KineSkiaVulkanBackend {
     void* instance;              /* VkInstance */
@@ -69,7 +70,7 @@ KINE_SKIA_API void Kine_Skia_Surface_Destroy(KineSkiaSurface* surface);
 
 KINE_SKIA_API int Kine_Skia_Surface_GetWidth(const KineSkiaSurface* surface);
 KINE_SKIA_API int Kine_Skia_Surface_GetHeight(const KineSkiaSurface* surface);
-KINE_SKIA_API size_t Kine_Skia_Surface_GetRowBytes(const KineSkiaSurface* surface);
+KINE_SKIA_API uint32_t Kine_Skia_Surface_GetRowBytes(const KineSkiaSurface* surface);
 KINE_SKIA_API void* Kine_Skia_Surface_GetPixels(KineSkiaSurface* surface);
 KINE_SKIA_API void Kine_Skia_Surface_Flush(KineSkiaSurface* surface);
 KINE_SKIA_API void Kine_Skia_Surface_SetBackdropFromSurface(
@@ -89,12 +90,29 @@ KINE_SKIA_API void Kine_Skia_Surface_Clear(
     KineSkiaSurface* surface,
     uint8_t r, uint8_t g, uint8_t b, uint8_t a);
 
+/* ---------------- Runtime SkSL shaders ---------------- */
+
+KINE_SKIA_API KineSkiaRuntimeShader* Kine_Skia_RuntimeShader_Create(const char* sksl);
+KINE_SKIA_API void Kine_Skia_RuntimeShader_Destroy(KineSkiaRuntimeShader* shader);
+KINE_SKIA_API bool Kine_Skia_RuntimeShader_SetUniform(
+    KineSkiaRuntimeShader* shader, const char* name, const float* values, int valueCount);
+KINE_SKIA_API void Kine_Skia_Surface_DrawRuntimeShaderRect(
+    KineSkiaSurface* surface, KineSkiaRuntimeShader* shader,
+    float x, float y, float width, float height);
+KINE_SKIA_API const char* Kine_Skia_RuntimeShader_GetLastError(void);
+
 /* ---------------- Shapes ----------------
    strokeWidth == 0 -> filled. strokeWidth > 0 -> stroked with that width. */
 
 KINE_SKIA_API void Kine_Skia_Surface_DrawRect(
     KineSkiaSurface* surface,
     float x, float y, float width, float height,
+    uint8_t r, uint8_t g, uint8_t b, uint8_t a,
+    float strokeWidth);
+
+KINE_SKIA_API void Kine_Skia_Surface_DrawRotatedRect(
+    KineSkiaSurface* surface,
+    float centerX, float centerY, float width, float height, float rotationDegrees,
     uint8_t r, uint8_t g, uint8_t b, uint8_t a,
     float strokeWidth);
 
@@ -219,6 +237,24 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawText(
     float fontSize,
     const char* fontPath,
     uint8_t r, uint8_t g, uint8_t b, uint8_t a);
+
+KINE_SKIA_API void Kine_Skia_Surface_DrawTextShadow(
+    KineSkiaSurface* surface,
+    const char* text,
+    float x, float y,
+    float fontSize,
+    const char* fontPath,
+
+    float offsetX,
+    float offsetY,
+    float blurSigma,
+    float spread,
+
+    uint8_t shadowR,
+    uint8_t shadowG,
+    uint8_t shadowB,
+    uint8_t shadowA
+);
 
 KINE_SKIA_API float Kine_Skia_Surface_MeasureText(
     const char* text,

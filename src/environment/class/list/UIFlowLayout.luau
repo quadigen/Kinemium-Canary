@@ -4,6 +4,7 @@ local Vector2 = require("@Vector2")
 local Enum = require("@EnumMap")
 
 local UDim = require("@UDim")
+local UILayout = require("@UILayout")
 
 local propTable = {
 	FillDirection = Enum.FillDirection.Horizontal,
@@ -14,7 +15,7 @@ local propTable = {
 	ItemAlignment = Enum.VerticalAlignment.Top, -- Alignment of items within a row/column
 	Enabled = true,
 	Name = "UIFlowLayout",
-	render = function(lib, object, dt, structs)
+	render = function(surface, object)
 		if not object.Enabled then
 			return
 		end
@@ -25,36 +26,13 @@ local propTable = {
 			return
 		end
 
-		local function GetAbsoluteSize(obj)
-			if obj.AbsoluteSize then
-				return obj.AbsoluteSize
-			end
+		local parentSize = UILayout.GetAbsoluteSize(parent, surface)
 
-			if obj:IsA("ScreenGui") then
-				return Vector2.new(lib.GetRenderWidth(), lib.GetRenderHeight())
-			end
-
-			local parentSize = GetAbsoluteSize(obj.Parent)
-
-			return obj.Size:ToPixels(parentSize)
-		end
-
-		local parentSize = GetAbsoluteSize(parent)
-
-		local paddingX, paddingY = 0, 0
-
-		for _, child in ipairs(parent:GetChildren()) do
-			if child.ClassName == "UIPadding" then
-				local px = child.Padding:ToPixels(parentSize)
-
-				paddingX += px.X
-
-				paddingY += px.Y
-			end
-		end
-
-		local containerSize =
-			Vector2.new(math.max(0, parentSize.X - paddingX * 2), math.max(0, parentSize.Y - paddingY * 2))
+		local paddingX, paddingRight, paddingY, paddingBottom = UILayout.GetPadding(parent, parentSize)
+		local containerSize = Vector2.new(
+			math.max(0, parentSize.X - paddingX - paddingRight),
+			math.max(0, parentSize.Y - paddingY - paddingBottom)
+		)
 
 		local children = {}
 
@@ -81,7 +59,7 @@ local propTable = {
 		local isHorizontal = object.FillDirection == Enum.FillDirection.Horizontal
 
 		for _, child in ipairs(children) do
-			local size = child.Size:ToPixels(containerSize)
+			local size = UILayout.GetSize(child, containerSize)
 
 			if isHorizontal then
 				if currentRow.size.X + size.X > containerSize.X and #currentRow.children > 0 then

@@ -6,6 +6,21 @@ local zembed = require("@zembed")
 
 local DEFAULT_FONT_PATH = zembed.AssetPath("kineasset://fonts/Montserrat-Medium.ttf")
 
+local function readCString(pointer, maxLength: number?): string
+	if not pointer or pointer == zune.ffi.null then
+		return ""
+	end
+	local bytes = {}
+	for index = 0, (maxLength or 4096) - 1 do
+		local byte = pointer:readu8(index)
+		if byte == 0 then
+			break
+		end
+		bytes[#bytes + 1] = string.char(byte)
+	end
+	return table.concat(bytes)
+end
+
 local function colorToBytes(color: typedefs.Color)
 	return math.floor(color.R * 255 + 0.5),
 		math.floor(color.G * 255 + 0.5),
@@ -49,6 +64,69 @@ function SkiaAdapter:Clear(context, color: typedefs.Color)
 	)
 end
 
+function SkiaAdapter:CreateRuntimeShader(source: string)
+	local handle = skia.lib.Kine_Skia_RuntimeShader_Create(source)
+	if not handle or handle == zune.ffi.null then
+		return nil, readCString(skia.lib.Kine_Skia_RuntimeShader_GetLastError())
+	end
+	return handle
+end
+
+function SkiaAdapter:DestroyRuntimeShader(shader)
+	if shader and shader ~= zune.ffi.null then
+		skia.lib.Kine_Skia_RuntimeShader_Destroy(shader)
+	end
+end
+
+function SkiaAdapter:SetRuntimeShaderUniform(shader, name: string, values: { number })
+	if not shader or shader == zune.ffi.null or #values == 0 then
+		return false
+	end
+	local data = zune.ffi.alloc(#values * 4)
+	for index, value in ipairs(values) do
+		data:writef32((index - 1) * 4, value)
+	end
+	local result = skia.lib.Kine_Skia_RuntimeShader_SetUniform(shader, name, data, #values) ~= 0
+	zune.ffi.free(data)
+	return result
+end
+
+function SkiaAdapter:DrawRuntimeShaderRect(context, shader, rect: typedefs.Rectangle)
+	if shader and shader ~= zune.ffi.null then
+		skia.lib.Kine_Skia_Surface_DrawRuntimeShaderRect(context, shader, rect.x, rect.y, rect.width, rect.height)
+	end
+end
+
+function SkiaAdapter:DrawTextShadow(
+	skiaSurface,
+	text: string,
+	position: typedefs.TextArgs,
+	offset,
+	blur: number,
+	spread: number,
+	color: typedefs.Color
+)
+	local fontPath = getFontPath(position.Font)
+	local r, g, b, a = colorToBytes(color)
+
+	skia.lib.Kine_Skia_Surface_DrawTextShadow(
+		skiaSurface,
+		text,
+		position.X,
+		position.Y,
+		position.TextSize,
+		fontPath,
+		offset.X or 0,
+		offset.Y or 0,
+		blur,
+		spread,
+		r,
+		g,
+		b,
+		a
+	)
+end
+
 function SkiaAdapter:DrawRect(context, rect: typedefs.Rectangle)
 	local r, g, b, a = colorToBytes(rect.Color)
 	skia.lib.Kine_Skia_Surface_DrawRect(
@@ -61,9 +139,63 @@ function SkiaAdapter:DrawRect(context, rect: typedefs.Rectangle)
 		g,
 		b,
 		a,
-		rect.isOutline and 1 or 0,
 		rect.isOutline and 2 or 0
 	)
+end
+
+function SkiaAdapter:DrawRotatedRect(context, rect: typedefs.Rectangle, rotationDegrees: number)
+	local r, g, b, a = colorToBytes(rect.Color)
+	skia.lib.Kine_Skia_Surface_DrawRotatedRect(
+		context,
+		rect.x,
+		rect.y,
+		rect.width,
+		rect.height,
+		rotationDegrees,
+		r,
+		g,
+		b,
+		a,
+		rect.isOutline and 2 or 0
+	)
+end
+
+function SkiaAdapter:DrawCircle(context, center, radius: number, color: typedefs.Color, strokeWidth: number?)
+	local r, g, b, a = colorToBytes(color)
+	skia.lib.Kine_Skia_Surface_DrawCircle(context, center.X, center.Y, radius, r, g, b, a, strokeWidth or 0)
+end
+
+function SkiaAdapter:DrawLine(context, from, to, strokeWidth: number, color: typedefs.Color)
+	local r, g, b, a = colorToBytes(color)
+	skia.lib.Kine_Skia_Surface_DrawLine(context, from.X, from.Y, to.X, to.Y, strokeWidth, r, g, b, a)
+end
+
+function SkiaAdapter:DrawPolygon(context, points, closed: boolean, color: typedefs.Color, strokeWidth: number?)
+	if type(points) ~= "table" or #points < 2 then
+		return
+	end
+	local data = zune.ffi.alloc(#points * 8)
+	for index, point in ipairs(points) do
+		local offset = (index - 1) * 8
+		data:writef32(offset, point.X)
+		data:writef32(offset + 4, point.Y)
+	end
+	local r, g, b, a = colorToBytes(color)
+	skia.lib.Kine_Skia_Surface_DrawPolygon(context, data, #points, closed and 1 or 0, r, g, b, a, strokeWidth or 0)
+	zune.ffi.free(data)
+end
+
+function SkiaAdapter:GetPixel(context, x: number, y: number)
+	local rgba = zune.ffi.alloc(4)
+	skia.lib.Kine_Skia_Surface_GetPixel(context, x, y, rgba, rgba:offset(1), rgba:offset(2), rgba:offset(3))
+	local color = {
+		R = rgba:readu8(0) / 255,
+		G = rgba:readu8(1) / 255,
+		B = rgba:readu8(2) / 255,
+		A = rgba:readu8(3) / 255,
+	}
+	zune.ffi.free(rgba)
+	return color
 end
 
 function SkiaAdapter:DrawRoundRect(
@@ -242,6 +374,28 @@ function SkiaAdapter:DrawImageSized(skiaSurface, image: typedefs.Image, rect: ty
 		rect.y,
 		rect.width,
 		rect.height,
+		alpha and math.floor(alpha * 255 + 0.5) or 255
+	)
+end
+
+function SkiaAdapter:DrawImageRect(
+	skiaSurface,
+	image: typedefs.Image,
+	sourceRect: typedefs.Rectangle,
+	destinationRect: typedefs.Rectangle,
+	alpha: number?
+)
+	skia.lib.Kine_Skia_Surface_DrawImageRect(
+		skiaSurface,
+		image._handle,
+		sourceRect.x,
+		sourceRect.y,
+		sourceRect.width,
+		sourceRect.height,
+		destinationRect.x,
+		destinationRect.y,
+		destinationRect.width,
+		destinationRect.height,
 		alpha and math.floor(alpha * 255 + 0.5) or 255
 	)
 end

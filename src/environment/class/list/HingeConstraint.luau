@@ -2,13 +2,14 @@
 local _Vector3 = require("@Vector3")
 local Enum = require("@EnumMap")
 local _signal = require("@Kinemium.signal")
-local _state = require("@State")
 local Color3 = require("@Color3")
 local CFrame = require("@CFrame")
 local NetworkOwnership = require("@NetworkOwnership")
+local ConstraintVisualizer = require("@ConstraintVisualizer")
+local ConstraintRetry = require("@ConstraintRetry")
 
-local adapter = require("@RaylibAdapter")
-local rl = adapter.lib
+local adapterOk, adapter = pcall(require, "@RaylibAdapter")
+adapter = adapterOk and adapter or nil
 
 local propTable = {
 	Attachment0 = nil,
@@ -43,15 +44,13 @@ return {
 
 		local function cleanup()
 			if _activeConstraint then
-				KinemiumPhysicsService.jolt.lib.JPH_PhysicsSystem_RemoveConstraint(
-					KinemiumPhysicsService.jolt.physicsSystem,
-					_activeConstraint
-				)
+				KinemiumPhysicsService.RemoveConstraint(_activeConstraint)
 				_activeConstraint = nil
 			end
 		end
 
 		local function rebuild()
+			ConstraintRetry.Cancel(instance)
 			cleanup()
 
 			if not instance.Enabled then
@@ -79,7 +78,7 @@ return {
 			local bodyID1 = KinemiumPhysicsService.GetBody(part1)
 
 			if not bodyID0 or not bodyID1 then
-				task.defer(rebuild)
+				ConstraintRetry.Schedule(instance, rebuild)
 				return
 			end
 
@@ -124,14 +123,14 @@ return {
 					end
 				end
 				if part0 then
-					part0.Changed:Connect(onPartChanged)
+					ConstraintRetry.Track(instance, part0.Changed:Connect(onPartChanged))
 				end
 				if part1 then
-					part1.Changed:Connect(onPartChanged)
+					ConstraintRetry.Track(instance, part1.Changed:Connect(onPartChanged))
 				end
 			else
 				warn("[HingeConstraint] CreateHinge returned nil - bodies may not be registered yet")
-				task.defer(rebuild)
+				ConstraintRetry.Schedule(instance, rebuild)
 			end
 		end
 
@@ -317,7 +316,7 @@ return {
 
 		instance.Changed:Connect(function(prop)
 			if prop == "Attachment0" or prop == "Attachment1" or prop == "Enabled" or prop == "Offset" then
-				rebuild()
+				ConstraintRetry.Schedule(instance, rebuild, 0)
 			elseif
 				prop == "ActuatorType"
 				or prop == "AngularVelocity"
@@ -337,12 +336,13 @@ return {
 				cleanup()
 			end
 		end)
-
-		renderer.Pool.new("gizmo", function()
-			drawGizmo()
+		NetworkOwnership.ObserveConstraint(instance, function()
+			ConstraintRetry.Schedule(instance, rebuild, 0)
 		end)
 
-		rebuild()
+		ConstraintVisualizer.Attach(instance, renderer)
+
+		ConstraintRetry.Schedule(instance, rebuild, 0)
 
 		return instance
 	end,

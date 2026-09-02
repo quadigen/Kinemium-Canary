@@ -7,6 +7,7 @@ type float = number
 type double = number
 type uint = number
 type bool = number
+type cstring = string
 type FFIPointer = typeof(ffi.types.pointer)
 
 local KineMaterialKind = {
@@ -37,6 +38,16 @@ export type Fns = {
 	Kine_Filament_GetColorTextureId: (ctx: FFIPointer) -> uint,
 	Kine_Filament_GetVulkanBackend: (ctx: FFIPointer, outBackend: FFIPointer) -> bool,
 	Kine_Filament_DebugPrintPixel: (ctx: FFIPointer) -> (),
+	Kine_Filament_Shader_Create: (ctx: FFIPointer, materialSource: cstring) -> FFIPointer,
+	Kine_Filament_Shader_Destroy: (shader: FFIPointer) -> (),
+	Kine_Filament_Shader_SetUniform: (
+		shader: FFIPointer,
+		name: cstring,
+		values: FFIPointer,
+		valueCount: int
+	) -> bool,
+	Kine_Filament_SetGlobalShader: (ctx: FFIPointer, shader: FFIPointer?) -> bool,
+	Kine_Filament_Shader_GetLastError: () -> FFIPointer,
 
 	Kine_Filament_CreateSky: (ctx: FFIPointer, r: float, g: float, b: float, a: float) -> (),
 	Kine_Filament_SetPostProcessing: (ctx: FFIPointer, enabled: bool) -> (),
@@ -263,7 +274,7 @@ export type Fns = {
 	-- materialKind: 0=default, 1=glass, 2=neon, 3=water, 7=terrain
 	-- param1/param2/param3: roughness/ior/thickness (glass/water), intensity/unused/unused (neon)
 	-- transmission: glass/water only
-	-- mat4: pointer to float[16] column-major world transform
+	-- mat4: pointer to float[16] row-major world transform; the native shim converts it to Filament columns
 	-- tex: optional KineFilamentTex* (nil for no texture)
 	Kine_Filament_DrawMeshEx: (
 		ctx: FFIPointer,
@@ -504,6 +515,26 @@ local funcs = {
 		returns = ffi.types.void,
 		args = { ffi.types.pointer },
 	},
+	Kine_Filament_Shader_Create = {
+		returns = ffi.types.pointer,
+		args = { ffi.types.pointer, ffi.types.pointer },
+	},
+	Kine_Filament_Shader_Destroy = {
+		returns = ffi.types.void,
+		args = { ffi.types.pointer },
+	},
+	Kine_Filament_Shader_SetUniform = {
+		returns = ffi.types.u8,
+		args = { ffi.types.pointer, ffi.types.pointer, ffi.types.pointer, ffi.types.i32 },
+	},
+	Kine_Filament_SetGlobalShader = {
+		returns = ffi.types.u8,
+		args = { ffi.types.pointer, ffi.types.pointer },
+	},
+	Kine_Filament_Shader_GetLastError = {
+		returns = ffi.types.pointer,
+		args = {},
+	},
 
 	-- Sky / post-processing
 	Kine_Filament_CreateSky = {
@@ -721,7 +752,7 @@ local funcs = {
 	},
 	Kine_Filament_CreateMeshFromPath = {
 		returns = ffi.types.pointer,
-		args = { ffi.types.pointer, ffi.types.i8 },
+		args = { ffi.types.pointer, ffi.types.pointer },
 	},
 	Kine_Filament_DestroyMesh = {
 		returns = ffi.types.void,

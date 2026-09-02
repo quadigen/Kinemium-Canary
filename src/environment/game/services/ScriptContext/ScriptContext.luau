@@ -2,6 +2,17 @@ local Instance = require("@Instance")
 local Enum = require("@EnumMap")
 local kilang = require("@kilang")
 local datatypes = require("@Kinemium.datatypes.get")
+local Registry = require("@Kinemium.registry")
+
+local Vector3 = require("@Vector3")
+local CFrame = require("@CFrame")
+local Color3 = require("@Color3")
+local BrickColor = require("@BrickColor")
+local UDim2 = require("@UDim2")
+local UDim = require("@UDim")
+local Ray = require("@Ray")
+local RaycastParams = require("@RaycastParams")
+local TweenInfo = require("@TweenInfo")
 
 local ScriptContext = Instance.new("ScriptContext")
 ScriptContext.ExplorerHidden = true
@@ -18,11 +29,242 @@ local console_log = function(log)
 	print(log)
 end
 local ishared = {}
+local shared = {}
 
 ScriptContext.InitRenderer = function(renderer, signal, datamodel)
+	pcall(function()
+		if datatypes and datatypes.Init then
+			datatypes:Init(datamodel, renderer, datatypes)
+		end
+	end)
+
 	local requiredCache = {}
 	local REQUIRE_LOADING = {}
 	local REQUIRE_NIL = {}
+
+	local function getLogService()
+		local ok, serv = pcall(function()
+			return datamodel:GetService("LogService")
+		end)
+		return ok and serv or nil
+	end
+
+	local function buildScriptEnvironment(scriptObject, customRequire)
+		local env = table.clone(datatypes)
+
+		if kilang and kilang.env then
+			for k, v in pairs(kilang.env) do
+				env[k] = v
+			end
+		end
+
+		env.Vector3 = env.Vector3 or Vector3
+		env.CFrame = env.CFrame or CFrame
+		env.Color3 = env.Color3 or Color3
+		env.BrickColor = env.BrickColor or BrickColor
+		env.UDim2 = env.UDim2 or UDim2
+		env.UDim = env.UDim or UDim
+		env.Ray = env.Ray or Ray
+		env.RaycastParams = env.RaycastParams or RaycastParams
+		env.TweenInfo = env.TweenInfo or TweenInfo
+
+		env.Instance = {
+			new = function(class, parent)
+				local Object = Registry.new(class, renderer, datamodel)
+				if parent and Object then
+					Object.Parent = parent
+				end
+				return Object
+			end,
+			getClasses = Registry.getClasses,
+			GetActiveInstances = Registry.GetActiveInstances,
+		}
+
+		env.game = datamodel
+		env.workspace = datamodel:GetService("Workspace")
+		env.Enum = Enum
+		env.shared = shared
+		env.ishared = ishared
+		env.script = scriptObject
+		env.require = customRequire
+
+		local taskSubCount = 0
+		local scriptName = scriptObject and (scriptObject.Name .. " (" .. tostring(scriptObject:GetFullName()) .. ")") or "SandboxedScript"
+
+		env.task = {
+			cancel = zune.task.cancel,
+			wait = zune.task.wait,
+			spawn = function(fn, ...)
+				local th = zune.task.spawn(fn, ...)
+				taskSubCount += 1
+				if type(th) == "thread" and kilang and kilang.threads then
+					kilang.threads[`{scriptName} (task.spawn #{taskSubCount})`] = th
+				end
+				return th
+			end,
+			defer = function(fn, ...)
+				local th = zune.task.defer(fn, ...)
+				taskSubCount += 1
+				if type(th) == "thread" and kilang and kilang.threads then
+					kilang.threads[`{scriptName} (task.defer #{taskSubCount})`] = th
+				end
+				return th
+			end,
+			delay = function(dt, fn, ...)
+				local th = zune.task.delay(dt, fn, ...)
+				taskSubCount += 1
+				if type(th) == "thread" and kilang and kilang.threads then
+					kilang.threads[`{scriptName} (task.delay #{taskSubCount})`] = th
+				end
+				return th
+			end,
+			desynchronize = function()
+				local thread = coroutine.running()
+				if thread then
+					zune.task.defer(thread)
+					coroutine.yield()
+				end
+			end,
+			synchronize = function()
+				local thread = coroutine.running()
+				if thread then
+					zune.task.defer(thread)
+					coroutine.yield()
+				end
+			end,
+		}
+		env.wait = zune.task.wait
+		env.tick = function()
+			return os.clock()
+		end
+
+		env.typeof = function(v)
+			if type(v) == "table" then
+				if rawget(v, "BaseClass") == "Instance" then
+					return "Instance"
+				end
+				local t = rawget(v, "type")
+				if t then
+					return t
+				end
+				local t2 = rawget(v, "__type")
+				if t2 then
+					return t2
+				end
+				return "table"
+			else
+				return type(v)
+			end
+		end
+
+		env.print = function(...)
+			local logServ = getLogService()
+			if logServ and logServ.CreateLog then
+				pcall(logServ.CreateLog, "print", ...)
+			end
+			print(...)
+		end
+
+		env.warn = function(...)
+			local logServ = getLogService()
+			if logServ and logServ.CreateLog then
+				pcall(logServ.CreateLog, "warn", ...)
+			end
+			warn(...)
+		end
+
+		env.error = function(...)
+			local logServ = getLogService()
+			if logServ and logServ.CreateLog then
+				pcall(logServ.CreateLog, "error", ...)
+			end
+			error(...)
+		end
+
+		env.buffer = {
+			copy = buffer.copy,
+			create = buffer.create,
+			len = buffer.len,
+			tostring = buffer.tostring,
+			fromstring = buffer.fromstring,
+			readi8 = buffer.readi8,
+			readi16 = buffer.readi16,
+			readi32 = buffer.readi32,
+			readu8 = buffer.readu8,
+			readu16 = buffer.readu16,
+			readu32 = buffer.readu32,
+			readf32 = buffer.readf32,
+			readf64 = buffer.readf64,
+			readstring = buffer.readstring,
+			readbits = buffer.readbits,
+			writei8 = buffer.writei8,
+			writei16 = buffer.writei16,
+			writei32 = buffer.writei32,
+			writeu8 = buffer.writeu8,
+			writeu16 = buffer.writeu16,
+			writeu32 = buffer.writeu32,
+			writef32 = buffer.writef32,
+			writef64 = buffer.writef64,
+			writestring = buffer.writestring,
+			writebits = buffer.writebits,
+			readi64 = function(b: buffer, offset: number): number
+				local lo = buffer.readu32(b, offset)
+				local hi = buffer.readi32(b, offset + 4)
+				return hi * 2 ^ 32 + lo
+			end,
+			writei64 = function(b: buffer, offset: number, value: number)
+				local lo = value % 2 ^ 32
+				local hi = math.floor(value / 2 ^ 32)
+				buffer.writeu32(b, offset, lo)
+				buffer.writei32(b, offset + 4, hi)
+			end,
+			readu64 = function(b: buffer, offset: number): number
+				local lo = buffer.readu32(b, offset)
+				local hi = buffer.readu32(b, offset + 4)
+				return hi * 2 ^ 32 + lo
+			end,
+			writeu64 = function(b: buffer, offset: number, value: number)
+				local lo = value % 2 ^ 32
+				local hi = math.floor(value / 2 ^ 32)
+				buffer.writeu32(b, offset, lo)
+				buffer.writeu32(b, offset + 4, hi)
+			end,
+			fill = function(b: buffer, value: number, offset: number?, length: number?)
+				local start = offset or 0
+				local stop = start + (length or buffer.len(b) - start)
+				for i = start, stop - 1 do
+					buffer.writeu8(b, i, value)
+				end
+			end,
+			slice = function(b: buffer, offset: number, length: number): buffer
+				local out = buffer.create(length)
+				buffer.copy(out, 0, b, offset, length)
+				return out
+			end,
+			concat = function(a: buffer, b: buffer): buffer
+				local aLen = buffer.len(a)
+				local bLen = buffer.len(b)
+				local out = buffer.create(aLen + bLen)
+				buffer.copy(out, 0, a, 0, aLen)
+				buffer.copy(out, aLen, b, 0, bLen)
+				return out
+			end,
+			equals = function(a: buffer, b: buffer): boolean
+				local len = buffer.len(a)
+				if len ~= buffer.len(b) then
+					return false
+				end
+				for i = 0, len - 1 do
+					if buffer.readu8(a, i) ~= buffer.readu8(b, i) then
+						return false
+					end
+				end
+				return true
+			end,
+		}
+
+		return env
+	end
 
 	local function hasExplicitNilReturn(source)
 		if type(source) ~= "string" then
@@ -109,10 +351,8 @@ ScriptContext.InitRenderer = function(renderer, signal, datamodel)
 		local runtimes = {
 			Luau = {
 				newthread = function(scriptObject: Instance, datamodel: DataModel)
-					local script_environment = table.clone(datatypes)
-					script_environment.ishared = ishared
-					script_environment.script = scriptObject
-					script_environment.require = function(target)
+					local customRequire
+					customRequire = function(target)
 						if type(target) == "string" then
 							if target:match("^@kine/") then
 								local name = string.sub(target, 7)
@@ -173,15 +413,14 @@ ScriptContext.InitRenderer = function(renderer, signal, datamodel)
 						local source = target.Source
 						local success, result, id, thread, getResult
 						if source and type(source) == "string" then
+							local moduleEnv = buildScriptEnvironment(target, customRequire)
+							moduleEnv.src = target
+							moduleEnv.loader = scriptObject
+
 							id, success, result, thread, getResult = kilang:execute(
 								source,
 								{ StackId = getModuleStackId(target) },
-								{
-									script = target,
-									src = target,
-									loader = scriptObject,
-									require = script_environment.require,
-								}
+								moduleEnv
 							)
 						end
 
@@ -234,6 +473,7 @@ ScriptContext.InitRenderer = function(renderer, signal, datamodel)
 						return result
 					end
 
+					local script_environment = buildScriptEnvironment(scriptObject, customRequire)
 					local source = scriptObject.Source
 					print("DEBUG Source length for", scriptObject.Name, ":", source and #source or "NIL SOURCE")
 					if not activeThreads["Luau"] then
@@ -245,8 +485,6 @@ ScriptContext.InitRenderer = function(renderer, signal, datamodel)
 						{ StackId = `{scriptObject.Name} ({scriptObject:GetFullName()})` },
 						script_environment
 					)
-
-					print(success, result)
 
 					-- add to thread table
 					activeThreads["Luau"][scriptObject.UniqueId] = thread
@@ -371,20 +609,16 @@ ScriptContext.InitRenderer = function(renderer, signal, datamodel)
 			end,
 
 			RunClientScripts = function()
-				local StarterPlayer, Players, CoreGui, InternalStorage, StarterClientScripts, StarterCharacterScripts =
+				local StarterPlayer, Players, CoreGui, InternalStorage =
 					getserv("StarterPlayer"),
 					getserv("Players"),
 					getserv("CoreGui"),
-					getserv("InternalStorage"),
-					datamodel.StarterPlayer.StarterPlayerScripts,
-					datamodel.StarterPlayer.StarterCharacterScripts
+					getserv("InternalStorage")
 
 				runScriptOfClass(StarterPlayer, "LocalScript")
 				runScriptOfClass(Players, "LocalScript")
 				runScriptOfClass(CoreGui, "LocalScript")
 				runScriptOfClass(InternalStorage, "LocalScript")
-				runScriptOfClass(StarterClientScripts, "LocalScript")
-				runScriptOfClass(StarterCharacterScripts, "LocalScript")
 
 				return true
 			end,

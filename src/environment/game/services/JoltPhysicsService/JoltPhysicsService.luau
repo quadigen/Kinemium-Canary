@@ -8,13 +8,15 @@ local lib = jolt.lib
 local Enum = require("@EnumMap")
 local structs = jolt.structs
 local bodyMaker = require("@_BodyMaker")
+local RaycastResult = require("@RaycastResult")
+local NetworkOwnership = require("@NetworkOwnership")
 
 local KinemiumPhysicsService = Instance.new("KinemiumPhysicsService")
 KinemiumPhysicsService.ExplorerHidden = true
 KinemiumPhysicsService._Intents = Enum.PluginIntents.Physics
 
 local bodiesMap = {} -- Part -> BodyID (uint32)
-local movingBodiesMap = {} -- Part -> BodyID for kinematic/dynamic bodies
+local movingBodiesMap = {} -- Part -> BodyID for locally authoritative dynamic bodies
 local softBodiesMap = {} -- SoftBody -> BodyID (uint32)
 local softBodyStates = {} -- SoftBody -> { vIds = {number} }
 local bodyPointerMap = {} -- Part -> BodyPointer (ffi.pointer)
@@ -22,14 +24,20 @@ local inverseMap = {} -- BodyID -> Part
 local bodyConnections = {} -- Part -> RBXScriptConnection
 local bodyTransformDirty = {} -- Part -> boolean
 local partsByNetworkId = {}
+local physicsDatamodel = nil
 
 local gravityBuffer = ffi.alloc(structs.JPH_Vec3:size(), structs.JPH_Vec3:alignment())
 local tempBodyPosition = ffi.alloc(structs.JPH_RVec3:size(), structs.JPH_RVec3:alignment())
 local tempBodyRotation = ffi.alloc(structs.JPH_Quat:size(), structs.JPH_Quat:alignment())
 local tempBodyLinear = ffi.alloc(structs.JPH_Vec3:size(), structs.JPH_Vec3:alignment())
 local tempBodyAngular = ffi.alloc(structs.JPH_Vec3:size(), structs.JPH_Vec3:alignment())
+local tempCharacterVelocity = ffi.alloc(structs.JPH_Vec3:size(), structs.JPH_Vec3:alignment())
+local tempCharacterGravity = ffi.alloc(structs.JPH_Vec3:size(), structs.JPH_Vec3:alignment())
+local tempCharacterPosition = ffi.alloc(structs.JPH_RVec3:size(), structs.JPH_RVec3:alignment())
+local tempCharacterOutputVelocity = ffi.alloc(structs.JPH_Vec3:size(), structs.JPH_Vec3:alignment())
 
 local terrainBodies = {} -- chunkKey -> BodyID
+local terrainBodyMaterials = {} -- BodyID -> dominant terrain material
 
 local collisionGroups = {
 	[0] = { name = "Default", collidesWith = {} },
@@ -97,7 +105,7 @@ local function unindexPart(part)
 end
 
 local function trackBodyMotion(part, bodyID, motionType)
-	if motionType ~= 0 then
+	if motionType == 2 then
 		movingBodiesMap[part] = bodyID
 	else
 		movingBodiesMap[part] = nil
@@ -214,17 +222,28 @@ local function _debugBody(bodyInterface, bodyID, partName)
 end
 
 local function getMotionTypeForPart(part)
-	if not part.Anchored then
+	if part.Anchored then
+		if part.IsKinematic then
+			return 1
+		end
+		return 0
+	end
+	if NetworkOwnership.ShouldSimulatePartForMachine(part, physicsDatamodel) then
 		return 2
-	elseif part.IsKinematic then
+	else
+		-- Remote dynamic bodies remain collision/query proxies, but snapshots
+		-- drive their transforms and the local solver never integrates them.
 		return 1
 	end
-
-	return 0
 end
 
 local function shouldHavePhysicsBody(part)
-	return not (part.Anchored == true and part.CanCollide == false and part.IsKinematic ~= true)
+	return not (
+		part.Anchored == true
+		and part.CanCollide == false
+		and part.CanQuery == false
+		and part.IsKinematic ~= true
+	)
 end
 
 local function getMeshPartGeometry(part)
@@ -526,6 +545,7 @@ local function readVec3(ptr)
 end
 
 KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
+	physicsDatamodel = game
 	task.spawn(function()
 		repeat
 			task.wait()
@@ -779,7 +799,10 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 			if physicsUnloaded or contactListener == ffi.null then
 				return
 			end
-			lib.JPH_ContactListener_PollEvents(contactListener, contactListenerProcs, 0)
+			-- FFI callbacks invoked repeatedly from one native call consume Zune's C
+			-- callback depth until that call returns. Draining an unbounded collision
+			-- burst therefore produces a wall of "C stack overflow" errors.
+			lib.JPH_ContactListener_PollEvents(contactListener, contactListenerProcs, 32)
 			dispatchTouchEvents()
 		end
 
@@ -845,6 +868,27 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 		end
 
 		local debugBodiesCreated = 0
+		local function refreshBodyMotion(part, bodyID)
+			local newMotion = getMotionTypeForPart(part)
+			local wasLocallySimulated = movingBodiesMap[part] ~= nil
+			local activationMode = if newMotion == 2 then 0 else 1
+
+			lib.JPH_BodyInterface_SetMotionType(bodyInterface, bodyID, newMotion, activationMode)
+			lib.JPH_BodyInterface_SetObjectLayer(bodyInterface, bodyID, getLayerForPart(part))
+			trackBodyMotion(part, bodyID, newMotion)
+
+			if newMotion == 2 then
+				if not wasLocallySimulated then
+					syncBodyTransformFromPart(part, bodyInterface, bodyID)
+				end
+				lib.JPH_BodyInterface_ActivateBody(bodyInterface, bodyID)
+				bodyTransformDirty[part] = nil
+			else
+				-- Static and remote kinematic bodies consume Instance/network state.
+				bodyTransformDirty[part] = true
+			end
+		end
+
 		local function CreateBodyForPart(part)
 			if not shouldHavePhysicsBody(part) then
 				RemoveBody(part)
@@ -893,31 +937,19 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 						if part.Anchored then
 							bodyTransformDirty[part] = true
 						end
-					elseif property == "Anchored" then
-						local newMotion = getMotionTypeForPart(part)
-						local newLayer = getLayerForPart(part)
-						-- activationMode: 0 = Activate (for dynamic), 1 = DontActivate (for static)
-						local activationMode = (newMotion == 2) and 0 or 1
-
-						lib.JPH_BodyInterface_SetMotionType(bodyInterface, bodyID, newMotion, activationMode)
-						lib.JPH_BodyInterface_SetObjectLayer(bodyInterface, bodyID, newLayer)
+					elseif
+						property == "Anchored"
+						or property == "IsKinematic"
+						or property == "NetworkOwner"
+						or property == "NetworkOwnerType"
+					then
+						refreshBodyMotion(part, bodyID)
 						updateBodyShape(part, bodyInterface, bodyID)
-						if newMotion == 2 then
-							-- Becoming dynamic: sync current part transform into Jolt so it
-							-- starts falling from the correct position, then activate it.
-							syncBodyTransformFromPart(part, bodyInterface, bodyID)
-							lib.JPH_BodyInterface_ActivateBody(bodyInterface, bodyID)
-							bodyTransformDirty[part] = nil
-						else
-							-- Becoming static/kinematic: push transform and mark dirty.
-							bodyTransformDirty[part] = true
-						end
-						trackBodyMotion(part, bodyID, newMotion)
 					elseif property == "CanCollide" or property == "CollisionGroup" then
 						local newLayer = getLayerForPart(part)
 						lib.JPH_BodyInterface_SetObjectLayer(bodyInterface, bodyID, newLayer)
 					elseif property == "Position" or property == "CFrame" then
-						if part.Anchored then
+						if getMotionTypeForPart(part) ~= 2 then
 							bodyTransformDirty[part] = true
 						end
 					end
@@ -928,6 +960,111 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 		end
 
 		local propTable = {
+			Raycast = function(origin, direction, params)
+				if not origin or not direction or direction:Magnitude() == 0 then
+					return nil
+				end
+
+				local filterRoots = params and params.FilterDescendantsInstances or nil
+				local filterType = params and params.FilterType or Enum.RaycastFilterType.Exclude
+				local includeFilter = filterType == Enum.RaycastFilterType.Include
+					or filterType == 1
+					or (type(filterType) == "table" and filterType.Name == "Include")
+				local queryGroupID = GetCollisionGroupId(params and params.CollisionGroup or "Default")
+				local queryGroup = collisionGroups[queryGroupID]
+				local allowedBodyIDs = {}
+
+				local function isFiltered(part)
+					for _, root in ipairs(filterRoots or {}) do
+						if part == root or (part.IsDescendantOf and part:IsDescendantOf(root)) then
+							return true
+						end
+					end
+					return false
+				end
+
+				for part, bodyID in pairs(bodiesMap) do
+					local matchesFilter = isFiltered(part)
+					local partGroupID = GetCollisionGroupId(part.CollisionGroup or "Default")
+					local allowed = part.Parent ~= nil
+						and part.CanQuery ~= false
+						and (not params or not params.RespectCanCollide or part.CanCollide == true)
+						and (not params or not params.IgnoreWater or part.Material ~= Enum.Material.Water)
+						and (not queryGroup or queryGroup.collidesWith[partGroupID] ~= false)
+						and (if includeFilter then matchesFilter else not matchesFilter)
+					if allowed then
+						table.insert(allowedBodyIDs, bodyID)
+					end
+				end
+				for _, bodyID in pairs(terrainBodies) do
+					local terrain = inverseMap[bodyID]
+					if terrain then
+						local matchesFilter = isFiltered(terrain)
+						local allowed = terrain.CanQuery ~= false
+							and (not params or not params.IgnoreWater or terrainBodyMaterials[bodyID] ~= Enum.Material.Water)
+							and (not queryGroup or queryGroup.collidesWith[0] ~= false)
+							and (if includeFilter then matchesFilter else not matchesFilter)
+						if allowed then
+							table.insert(allowedBodyIDs, bodyID)
+						end
+					end
+				end
+
+				if #allowedBodyIDs == 0 then
+					return nil
+				end
+
+				local originBuffer = ffi.alloc(structs.JPH_RVec3:size(), structs.JPH_RVec3:alignment())
+				originBuffer:writef64(0, origin.X)
+				originBuffer:writef64(8, origin.Y)
+				originBuffer:writef64(16, origin.Z)
+				local directionBuffer = ffi.alloc(structs.JPH_Vec3:size(), structs.JPH_Vec3:alignment())
+				directionBuffer:writef32(0, direction.X)
+				directionBuffer:writef32(4, direction.Y)
+				directionBuffer:writef32(8, direction.Z)
+				local bodyIDBuffer = ffi.alloc(#allowedBodyIDs * 4, 4)
+				for index, bodyID in ipairs(allowedBodyIDs) do
+					bodyIDBuffer:writeu32((index - 1) * 4, bodyID)
+				end
+				local hit = ffi.alloc(structs.JPH_RayCastResult:size(), structs.JPH_RayCastResult:alignment())
+				if
+					lib.JPH_PhysicsSystem_CastRay(
+						physicsSystem,
+						originBuffer,
+						directionBuffer,
+						bodyIDBuffer,
+						#allowedBodyIDs,
+						2,
+						hit
+					) == 0
+				then
+					return nil
+				end
+
+				local bodyID = hit:readu32(structs.JPH_RayCastResult:offset("bodyID"))
+				local part = inverseMap[bodyID]
+				if not part then
+					return nil
+				end
+				local positionOffset = structs.JPH_RayCastResult:offset("position")
+				local normalOffset = structs.JPH_RayCastResult:offset("normal")
+				local position = Vector3.new(
+					hit:readf64(positionOffset),
+					hit:readf64(positionOffset + 8),
+					hit:readf64(positionOffset + 16)
+				)
+				local normal =
+					Vector3.new(hit:readf32(normalOffset), hit:readf32(normalOffset + 4), hit:readf32(normalOffset + 8))
+				local material = terrainBodyMaterials[bodyID] or part.Material
+				return RaycastResult.new(
+					part,
+					position,
+					normal,
+					material,
+					direction:Magnitude() * hit:readf32(structs.JPH_RayCastResult:offset("fraction"))
+				)
+			end,
+
 			GetBody = function(part)
 				return bodiesMap[part]
 			end,
@@ -939,6 +1076,10 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 					return
 				end
 
+				-- UpdatePart is the synchronous route used by Part's Anchored and
+				-- ownership handlers. Keep the native motion type in sync here rather
+				-- than relying on the ordering of a second Changed listener.
+				refreshBodyMotion(part, body)
 				updatePhysicalProps(part)
 				updateBodyShape(part, bodyInterface, body)
 
@@ -982,15 +1123,43 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 				local bodyID = bodiesMap[part]
 				if not bodyID then
 					log("[Physics] ApplyImpulse: No body for part", part.Name)
-					return
+					return false
+				end
+				if movingBodiesMap[part] == nil then
+					-- Static and remotely-owned kinematic proxies cannot consume a local
+					-- impulse. Their authoritative simulation machine must apply it.
+					return false
 				end
 
 				lib.JPH_BodyInterface_ActivateBody(bodyInterface, bodyID)
 
-				local _isActive = lib.JPH_BodyInterface_IsActive(bodyInterface, bodyID)
-				local jImpulse = structs.JPH_Vec3:new({ x = impulse.X, y = impulse.Y, z = impulse.Z })
+				local velocity = tempBodyLinear
+				lib.JPH_BodyInterface_GetLinearVelocity(bodyInterface, bodyID, velocity)
+				local beforeX = velocity:readf32(0)
+				local beforeY = velocity:readf32(4)
+				local beforeZ = velocity:readf32(8)
+				local jImpulse = ffi.alloc(structs.JPH_Vec3:size(), structs.JPH_Vec3:alignment())
+				writeVec3(jImpulse, impulse)
 
 				lib.JPH_BodyInterface_AddImpulse(bodyInterface, bodyID, jImpulse)
+				lib.JPH_BodyInterface_GetLinearVelocity(bodyInterface, bodyID, velocity)
+				local afterX = velocity:readf32(0)
+				local afterY = velocity:readf32(4)
+				local afterZ = velocity:readf32(8)
+
+				-- Some kine_jolt builds expose AddImpulse but silently leave velocity
+				-- unchanged. Preserve impulse semantics with delta-v = impulse / mass.
+				local observedDeltaSq = (afterX - beforeX) ^ 2 + (afterY - beforeY) ^ 2 + (afterZ - beforeZ) ^ 2
+				local mass = math.max(tonumber(part.Mass) or 1, 0.001)
+				local expectedDeltaSq = (impulse.X ^ 2 + impulse.Y ^ 2 + impulse.Z ^ 2) / (mass * mass)
+				if expectedDeltaSq > 1e-8 and observedDeltaSq < expectedDeltaSq * 1e-4 then
+					velocity:writef32(0, beforeX + impulse.X / mass)
+					velocity:writef32(4, beforeY + impulse.Y / mass)
+					velocity:writef32(8, beforeZ + impulse.Z / mass)
+					lib.JPH_BodyInterface_SetLinearVelocity(bodyInterface, bodyID, velocity)
+				end
+				lib.JPH_BodyInterface_ActivateBody(bodyInterface, bodyID)
+				return true
 			end,
 
 			ApplyForce = function(part, force, applicationPoint)
@@ -1207,7 +1376,10 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 				rotation:writef32(12, 1)
 
 				local character = lib.JPH_CharacterVirtual_Create(settings, position, rotation, physicsSystem)
-				return character
+				if character == ffi.null then
+					return nil
+				end
+				return { character = character, shape = shape }
 			end,
 
 			DestroyHumanoidController = function(controller)
@@ -1223,16 +1395,16 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 					return nil
 				end
 
-				local jVelocity = ffi.alloc(structs.JPH_Vec3:size(), structs.JPH_Vec3:alignment())
+				local jVelocity = tempCharacterVelocity
 				writeVec3(jVelocity, velocity or Vector3.zero)
 				lib.JPH_CharacterVirtual_SetLinearVelocity(controller.character, jVelocity)
 
-				local jGravity = ffi.alloc(structs.JPH_Vec3:size(), structs.JPH_Vec3:alignment())
+				local jGravity = tempCharacterGravity
 				writeVec3(jGravity, gravity or Vector3.new(0, -9.81, 0))
 				lib.JPH_CharacterVirtual_Update(controller.character, dt, jGravity, ffi.null, ffi.null, ffi.null)
 
-				local position = ffi.alloc(structs.JPH_RVec3:size(), structs.JPH_RVec3:alignment())
-				local outVelocity = ffi.alloc(structs.JPH_Vec3:size(), structs.JPH_Vec3:alignment())
+				local position = tempCharacterPosition
+				local outVelocity = tempCharacterOutputVelocity
 				lib.JPH_CharacterVirtual_GetPosition(controller.character, position)
 				lib.JPH_CharacterVirtual_GetLinearVelocity(controller.character, outVelocity)
 
@@ -1301,9 +1473,12 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 				return Vector3.new(av:readf32(0), av:readf32(4), av:readf32(8))
 			end,
 
-			UpdateTerrainChunk = function(chunkKey, vertices, indices)
+			UpdateTerrainChunk = function(chunkKey, vertices, indices, material)
 				if terrainBodies[chunkKey] then
-					lib.JPH_BodyInterface_RemoveAndDestroyBody(bodyInterface, terrainBodies[chunkKey])
+					local oldBodyID = terrainBodies[chunkKey]
+					lib.JPH_BodyInterface_RemoveAndDestroyBody(bodyInterface, oldBodyID)
+					inverseMap[oldBodyID] = nil
+					terrainBodyMaterials[oldBodyID] = nil
 					terrainBodies[chunkKey] = nil
 				end
 
@@ -1329,6 +1504,8 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 
 				if bodyID then
 					terrainBodies[chunkKey] = bodyID
+					inverseMap[bodyID] = game.Workspace:FindFirstChild("Terrain")
+					terrainBodyMaterials[bodyID] = material
 				end
 			end,
 
@@ -1425,22 +1602,38 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 					return
 				end
 
-				local PCS = structs.JPH_PointConstraintSettings
-				local settings = ffi.alloc(PCS:size(), PCS:alignment())
-				lib.JPH_PointConstraintSettings_Init(settings)
-
-				settings:writei32(PCS:offset("space"), 1) -- JPH_ConstraintSpace_WorldSpace (1)
+				-- The bundled C API does not expose JPH_PointConstraint. A SixDOF
+				-- constraint with locked translation and free rotation is equivalent.
+				local SCS = structs.JPH_SixDOFConstraintSettings
+				local settings = ffi.alloc(SCS:size(), SCS:alignment())
+				lib.JPH_SixDOFConstraintSettings_Init(settings)
+				settings:writei32(SCS:offset("space"), 1) -- WorldSpace
 
 				local function setRVec3(offset, v)
 					settings:writef64(offset, v.X)
 					settings:writef64(offset + 8, v.Y)
 					settings:writef64(offset + 16, v.Z)
 				end
+				local function setVec3(offset, x, y, z)
+					settings:writef32(offset, x)
+					settings:writef32(offset + 4, y)
+					settings:writef32(offset + 8, z)
+				end
 
-				setRVec3(PCS:offset("point1"), point1)
-				setRVec3(PCS:offset("point2"), point2)
+				setRVec3(SCS:offset("position1"), point1)
+				setRVec3(SCS:offset("position2"), point2)
+				setVec3(SCS:offset("axisX1"), 1, 0, 0)
+				setVec3(SCS:offset("axisY1"), 0, 1, 0)
+				setVec3(SCS:offset("axisX2"), 1, 0, 0)
+				setVec3(SCS:offset("axisY2"), 0, 1, 0)
+				for axis = 0, 2 do
+					lib.JPH_SixDOFConstraintSettings_MakeFixedAxis(settings, axis)
+				end
+				for axis = 3, 5 do
+					lib.JPH_SixDOFConstraintSettings_MakeFreeAxis(settings, axis)
+				end
 
-				local constraint = lib.JPH_PointConstraint_Create(settings, bodyA, bodyB)
+				local constraint = lib.JPH_SixDOFConstraint_Create(settings, bodyA, bodyB)
 				if constraint ~= ffi.null then
 					lib.JPH_PhysicsSystem_AddConstraint(physicsSystem, constraint)
 				end
@@ -1641,7 +1834,8 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 				axisX2,
 				axisY2,
 				stiffness,
-				damping
+				damping,
+				maxAngle
 			)
 				local bodyA = bodyPointerMap[partA]
 				local bodyB = bodyPointerMap[partB]
@@ -1649,10 +1843,14 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 					return
 				end
 
-				local SCS = structs.JPH_SixDOFConstraintSettings
-				local settings = ffi.alloc(SCS:size(), SCS:alignment())
-				lib.JPH_SixDOFConstraintSettings_Init(settings)
-				settings:writei32(SCS:offset("space"), 1)
+				-- Jolt only supports limit springs on the three translational SixDOF
+				-- axes. A position-driven hinge is its native torsional spring: it
+				-- locks translation, permits twist around Axis, and drives that twist
+				-- back to zero with the requested stiffness and damping.
+				local HCS = structs.JPH_HingeConstraintSettings
+				local settings = ffi.alloc(HCS:size(), HCS:alignment())
+				lib.JPH_HingeConstraintSettings_Init(settings)
+				settings:writei32(HCS:offset("space"), 1)
 
 				local function setVec3(offset, v)
 					settings:writef32(offset, v.X)
@@ -1665,33 +1863,34 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 					settings:writef64(offset + 16, v.Z)
 				end
 
-				setRVec3(SCS:offset("position1"), point1)
-				setVec3(SCS:offset("axisX1"), axisX1)
-				setVec3(SCS:offset("axisY1"), axisY1)
-				setRVec3(SCS:offset("position2"), point2)
-				setVec3(SCS:offset("axisX2"), axisX2)
-				setVec3(SCS:offset("axisY2"), axisY2)
+				setRVec3(HCS:offset("point1"), point1)
+				setVec3(HCS:offset("hingeAxis1"), axisX1)
+				setVec3(HCS:offset("normalAxis1"), axisY1)
+				setRVec3(HCS:offset("point2"), point2)
+				setVec3(HCS:offset("hingeAxis2"), axisX2)
+				setVec3(HCS:offset("normalAxis2"), axisY2)
 
-				-- All free
-				for i = 0, 5 do
-					lib.JPH_SixDOFConstraintSettings_MakeFreeAxis(settings, i)
-				end
+				local angle = maxAngle or math.pi
+				settings:writef32(HCS:offset("limitsMin"), -angle)
+				settings:writef32(HCS:offset("limitsMax"), angle)
 
-				-- Setup Spring Limits on RotX (axis 3)
-				-- We will give it a wide range limit but apply limits spring so it acts primarily like a torsion spring
-				lib.JPH_SixDOFConstraintSettings_SetLimitedAxis(settings, 3, -3.1415, 3.1415)
+				local MS = structs.JPH_MotorSettings
+				local SS = structs.JPH_SpringSettings
+				local motorOffset = HCS:offset("motorSettings")
+				settings:writeu32(motorOffset + MS:offset("springSettings") + SS:offset("mode"), 1)
+				settings:writef32(
+					motorOffset + MS:offset("springSettings") + SS:offset("frequencyOrStiffness"),
+					stiffness or 10.0
+				)
+				settings:writef32(motorOffset + MS:offset("springSettings") + SS:offset("damping"), damping or 0.5)
+				settings:writef32(motorOffset + MS:offset("minTorqueLimit"), -100000)
+				settings:writef32(motorOffset + MS:offset("maxTorqueLimit"), 100000)
 
-				local springSettings =
-					ffi.alloc(structs.JPH_SpringSettings:size(), structs.JPH_SpringSettings:alignment())
-				springSettings:writeu32(structs.JPH_SpringSettings:offset("mode"), 0) -- FrequencyAndDamping
-				springSettings:writef32(structs.JPH_SpringSettings:offset("frequencyOrStiffness"), stiffness or 10.0)
-				springSettings:writef32(structs.JPH_SpringSettings:offset("damping"), damping or 0.5)
-
-				lib.JPH_SixDOFConstraintSettings_SetLimitsSpringSettings(settings, 3, springSettings)
-
-				local constraint = lib.JPH_SixDOFConstraint_Create(settings, bodyA, bodyB)
+				local constraint = lib.JPH_HingeConstraint_Create(settings, bodyA, bodyB)
 				if constraint ~= ffi.null then
 					lib.JPH_PhysicsSystem_AddConstraint(physicsSystem, constraint)
+					lib.JPH_HingeConstraint_SetMotorState(constraint, 2)
+					lib.JPH_HingeConstraint_SetTargetAngle(constraint, 0)
 				end
 				return constraint
 			end,
@@ -2028,6 +2227,7 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 			end,
 
 			DeltatimeMultiplier = 1,
+			CollisionSteps = 2,
 
 			GetBodies = function()
 				return bodiesMap
@@ -2041,15 +2241,21 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 				return i
 			end,
 
+			RemoveConstraint = function(constraint)
+				if constraint and constraint ~= ffi.null then
+					lib.JPH_PhysicsSystem_RemoveConstraint(physicsSystem, constraint)
+				end
+			end,
+
 			GetVelocity = function(part)
 				local bodyID = bodiesMap[part]
 				if not bodyID then
 					return Vector3.new()
 				end
 
-				local velocity = structs.JPH_Vec3:new({ x = 0, y = 0, z = 0 })
+				local velocity = tempBodyLinear
 				lib.JPH_BodyInterface_GetLinearVelocity(bodyInterface, bodyID, velocity)
-				return FromJoltVec3(velocity)
+				return Vector3.new(velocity:readf32(0), velocity:readf32(4), velocity:readf32(8))
 			end,
 
 			jolt = {
@@ -2070,6 +2276,10 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 		local lastWind = nil
 
 		renderer.Hook.new("Renderstep", function(dt)
+			local perfStats = renderer.PerfStats
+			local physicsStepMs = 0
+			local proxySyncMs = 0
+			local proxySyncCount = 0
 			if debugBodiesCreated > 0 then
 				print(string.format("[Physics] Created %d Jolt bodies this frame", debugBodiesCreated))
 				lib.JPH_PhysicsSystem_OptimizeBroadPhase(physicsSystem)
@@ -2092,22 +2302,7 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 					lastWind = newWind
 				end
 
-				if next(movingBodiesMap) ~= nil or next(softBodiesMap) ~= nil then
-					renderer_signal:Fire("PrePhysics")
-					local _pst = os.clock()
-					lib.JPH_PhysicsSystem_Update(
-						physicsSystem,
-						dt,
-						4 * KinemiumPhysicsService.DeltatimeMultiplier,
-						jobSystem
-					)
-					local _pdur = os.clock() - _pst
-					if _pdur > 0.05 then
-						print(string.format("[Physics] JPH_PhysicsSystem_Update took %.2f ms", _pdur * 1000))
-					end
-					renderer_signal:Fire("PhysicsF")
-				end
-
+				local proxySyncStart = os.clock()
 				for part in pairs(bodyTransformDirty) do
 					local bodyID = bodiesMap[part]
 					if not bodyID or part.Parent == nil then
@@ -2115,13 +2310,33 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 						continue
 					end
 
-					if part.Anchored == true then
+					if getMotionTypeForPart(part) ~= 2 then
 						syncBodyTransformFromPart(part, bodyInterface, bodyID)
-						bodyTransformDirty[part] = nil
-						continue
+						proxySyncCount += 1
 					end
-
 					bodyTransformDirty[part] = nil
+				end
+				proxySyncMs = (os.clock() - proxySyncStart) * 1000
+
+				if next(movingBodiesMap) ~= nil or next(softBodiesMap) ~= nil then
+					renderer_signal:Fire("PrePhysics")
+					local _pst = os.clock()
+					local collisionSteps = math.clamp(
+						math.floor(
+							(KinemiumPhysicsService.CollisionSteps or 2)
+									* (KinemiumPhysicsService.DeltatimeMultiplier or 1)
+								+ 0.5
+						),
+						1,
+						8
+					)
+					lib.JPH_PhysicsSystem_Update(physicsSystem, dt, collisionSteps, jobSystem)
+					local _pdur = os.clock() - _pst
+					physicsStepMs = _pdur * 1000
+					if _pdur > 0.05 then
+						print(string.format("[Physics] JPH_PhysicsSystem_Update took %.2f ms", _pdur * 1000))
+					end
+					renderer_signal:Fire("PhysicsF")
 				end
 
 				local _syncStart = os.clock()
@@ -2144,37 +2359,53 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 					end
 
 					if part then
-						part.CFrame = cf
-						part.Position = cf.Position
+						local currentCFrame = part.CFrame
+						local transformChanged = not currentCFrame
+							or not currentCFrame:IsSameTransform(cf, 1e-4)
+						if transformChanged then
+							part.CFrame = cf
+						end
 
-						if linear ~= Vector3.zero then
+						local currentLinear = part.AssemblyLinearVelocity
+						if not currentLinear or currentLinear:DistanceSquared(linear) > 1e-8 then
 							part.AssemblyLinearVelocity = linear
 						end
 
-						if angular ~= Vector3.zero then
+						local currentAngular = part.AssemblyAngularVelocity
+						if not currentAngular or currentAngular:DistanceSquared(angular) > 1e-8 then
 							part.AssemblyAngularVelocity = angular
 						end
 
-						rawset(part, "__matrixDirty", true)
-						rawset(part, "__partAABB", nil)
-						local batch = rawget(part, "__workspaceBatch")
-						if batch then
-							batch.instancesDirty = true
-						end
-						local chunk = rawget(part, "__workspaceChunk")
-						if chunk then
-							chunk.instanceDataDirty = true
+						if transformChanged then
+							rawset(part, "__matrixDirty", true)
+							rawset(part, "__partAABB", nil)
+							local batch = rawget(part, "__workspaceBatch")
+							if batch then
+								batch.instancesDirty = true
+							end
+							local chunk = rawget(part, "__workspaceChunk")
+							if chunk then
+								chunk.instanceDataDirty = true
+							end
 						end
 					end
 				end
 				local _syncDur = os.clock() - _syncStart
+				local moving = 0
+				for _ in pairs(movingBodiesMap) do
+					moving += 1
+				end
+				if perfStats then
+					perfStats.physics_step_ms = physicsStepMs
+					perfStats.physics_sync_ms = _syncDur * 1000
+					perfStats.physics_proxy_sync_ms = proxySyncMs
+					perfStats.physics_proxy_updates = proxySyncCount
+					perfStats.physics_active_bodies = _nSimulated
+					perfStats.physics_owned_bodies = moving
+					perfStats.physics_collision_steps = KinemiumPhysicsService.CollisionSteps or 2
+				end
 				if _syncDur > 0.05 then
 					print(string.format("[Physics] CFrame Sync took %.2f ms (%d parts)", _syncDur * 1000, _nSimulated))
-				end
-
-				local moving = 0
-				for i, v in pairs(movingBodiesMap) do
-					moving += 1
 				end
 
 				for softBody, bodyID in pairs(softBodiesMap) do
@@ -2241,6 +2472,10 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 		end
 
 		log("[Physics] Registering Jolt with UnifiedPhysicsService")
+
+		propTable.CreateCharacterController = propTable.CreateHumanoidController
+		propTable.DestroyCharacterController = propTable.DestroyHumanoidController
+		propTable.StepCharacterController = propTable.StepHumanoidController
 		UPS:RegisterEngine("Jolt", propTable)
 		if not UPS:GetPrimaryEngineName() then
 			UPS:SetPrimaryEngine("Jolt")

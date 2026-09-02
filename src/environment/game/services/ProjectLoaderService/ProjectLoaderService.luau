@@ -225,10 +225,13 @@ ProjectLoaderService.InitRenderer = function(renderer, renderer_signal, datamode
 
 			datamodel:SetMetadata("ProjectManif", conf.manifest)
 			datamodel:SetMetadata("ProjectPath", projectPath)
-			-- not sure how to separate backups from the syncing function, maybe later
-			if conf.manifest.sync.live == true then
-				ProjectSyncService:StartSyncing(projectPath)
-			end
+			local runReadOnly = FlagExists("project-readonly")
+			local watch = FlagExists("project-watch")
+				or (conf.manifest.sync and conf.manifest.sync.live == true)
+			ProjectSyncService:StartSyncing(projectPath, {
+				watch = watch,
+				readOnly = runReadOnly,
+			})
 
 			-- spawn in separate thread
 			zune.task.spawn(function()
@@ -292,7 +295,29 @@ ProjectLoaderService.InitRenderer = function(renderer, renderer_signal, datamode
 
 	if FlagExists("project") then
 		local projectPath = GetFlagValue("project")
-		-- TODO: runtime
+		local configPath = fs.path.join(projectPath, "kproj.toml")
+		local readSuccess, configFile = pcall(fs.readFile, configPath)
+		if not readSuccess then
+			error(`[ProjectLoader] Failed to read project manifest '{configPath}': {tostring(configFile)}`)
+		end
+
+		local decodeSuccess, manifest = pcall(toml.decode, configFile)
+		if not decodeSuccess or type(manifest) ~= "table" then
+			error(`[ProjectLoader] Failed to decode project manifest '{configPath}': {tostring(manifest)}`)
+		end
+
+		zune.task.defer(function()
+			while datamodel.Loaded ~= true or type(datamodel.GetService) ~= "function" do
+				zune.task.wait()
+			end
+
+			local loadSuccess, loadError = pcall(ProjectLoaderService.LoadProject, projectPath, {
+				manifest = manifest,
+			})
+			if not loadSuccess then
+				error(`[ProjectLoader] Failed to load project '{projectPath}': {tostring(loadError)}`)
+			end
+		end)
 	end
 end
 

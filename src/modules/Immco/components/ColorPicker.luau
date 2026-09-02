@@ -219,7 +219,7 @@ return function(params: typedefs.ColorPickerParams, dt: number): (typedefs.RGBA,
 	local markerX = svRect.x + field.saturation * svRect.width
 	local markerY = svRect.y + (1 - field.value) * svRect.height
 	local markerSize = 10
-	local markerColor = (field.value > 0.5) and { R = 0, G = 0, B = 0, A = 1 } or { R = 1, G = 1, B = 1, A = 1 }
+	local markerColor = (field.value > 0.5) and { R = 0, G = 0, B = 0, A = 1 } or theme.InputTextColor
 	Rectangle({
 		x = markerX - markerSize / 2,
 		y = markerY - markerSize / 2,
@@ -282,7 +282,7 @@ return function(params: typedefs.ColorPickerParams, dt: number): (typedefs.RGBA,
 			alphaRect,
 			checkerSize,
 			{ R = 0.8, G = 0.8, B = 0.8, A = 1 },
-			{ R = 1, G = 1, B = 1, A = 1 },
+			theme.InputTextColor,
 			window,
 			theme,
 			dt
@@ -344,7 +344,7 @@ return function(params: typedefs.ColorPickerParams, dt: number): (typedefs.RGBA,
 				previewRect,
 				checkerSize,
 				{ R = 0.8, G = 0.8, B = 0.8, A = 1 },
-				{ R = 1, G = 1, B = 1, A = 1 },
+				theme.InputTextColor,
 				window,
 				theme,
 				dt

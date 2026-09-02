@@ -64,7 +64,7 @@ local function sendSerialized(peer, data, reliable)
 	payload:write(0, serialized, 0, size)
 	local sent = enet.lib.Kine_ENet_Peer_Send(peer, reliable and 0 or 1, payload, size, reliable and 1 or 0)
 	ffi.free(payload)
-	return sent ~= 0
+	return sent ~= 0, size
 end
 
 function Server.new()
@@ -80,6 +80,7 @@ function Server.new()
 		_onClientConnectionRequest = nil,
 		_onClientRemoved = nil,
 		_onPreAuthMessage = nil,
+		Stats = { bytesSent = 0, bytesReceived = 0, packetsSent = 0, packetsReceived = 0, malformedPackets = 0 },
 	}, Server)
 end
 
@@ -156,10 +157,13 @@ function Server:Poll()
 			local payload = enet.lib.Kine_ENet_Event_GetPayload(self._event)
 			local size = enet.lib.Kine_ENet_Event_GetPayloadSize(self._event)
 			local rawPayload = pointerToBuffer(payload, size)
+			self.Stats.bytesReceived += size
+			self.Stats.packetsReceived += 1
 			local ok, decoded = pcall(Serializer.Deserialize, rawPayload)
 			if ok and decoded then
 				self:HandlePacket(peer, decoded)
 			else
+				self.Stats.malformedPackets += 1
 				warn(`[ENet][Server] Failed to deserialize message from {peerKey(peer)}`)
 			end
 		elseif eventType == enet.Event.Disconnect then
@@ -203,7 +207,12 @@ function Server:Send(client, data, reliable)
 	if not client or not client.hConn then
 		return false
 	end
-	return sendSerialized(client.hConn, data, reliable == true)
+	local sent, size = sendSerialized(client.hConn, data, reliable == true)
+	if sent then
+		self.Stats.bytesSent += size or 0
+		self.Stats.packetsSent += 1
+	end
+	return sent
 end
 
 function Server:SendAll(data, reliable)
@@ -254,7 +263,15 @@ function Server:GetClientStats(client)
 	return {
 		pendingReliable = enet.lib.Kine_ENet_Peer_GetPendingReliableBytes(client.hConn),
 		pendingReliableFragments = 0,
+		bytesSent = self.Stats.bytesSent,
+		bytesReceived = self.Stats.bytesReceived,
+		packetsSent = self.Stats.packetsSent,
+		packetsReceived = self.Stats.packetsReceived,
 	}
+end
+
+function Server:GetStats()
+	return table.clone(self.Stats)
 end
 
 function Server:Shutdown()

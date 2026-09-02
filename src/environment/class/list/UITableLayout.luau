@@ -2,6 +2,7 @@
 local Vector2 = require("@Vector2")
 local Enum = require("@EnumMap")
 local UDim = require("@UDim")
+local UILayout = require("@UILayout")
 
 local propTable = {
 	Name = "UITableLayout",
@@ -19,7 +20,7 @@ local propTable = {
 
 	FillEmptyColumns = true,
 
-	render = function(lib, object, dt, structs)
+	render = function(surface, object)
 		if not object.Enabled then
 			return
 		end
@@ -28,33 +29,11 @@ local propTable = {
 			return
 		end
 
-		local function GetAbsoluteSize(obj)
-			if obj.AbsoluteSize then
-				return obj.AbsoluteSize
-			end
-			if obj:IsA("ScreenGui") then
-				local dpiScale = lib.GetWindowScaleDPI()
-				return Vector2.new(lib.GetRenderWidth() / dpiScale.x, lib.GetRenderHeight() / dpiScale.y)
-			else
-				local parentSize = GetAbsoluteSize(obj.Parent)
-				return obj.Size:ToPixels(parentSize)
-			end
-		end
+		local parentSize = UILayout.GetAbsoluteSize(parent, surface)
 
-		local parentSize = GetAbsoluteSize(parent)
-
-		local totalPaddingX = 0
-		local totalPaddingY = 0
-		for _, child in ipairs(parent:GetChildren()) do
-			if child.ClassName == "UIPadding" then
-				local px = child.Padding:ToPixels(parentSize)
-				totalPaddingX = totalPaddingX + px.X
-				totalPaddingY = totalPaddingY + px.Y
-			end
-		end
-
-		local effectiveWidth = math.max(0, parentSize.X - totalPaddingX * 2)
-		local effectiveHeight = math.max(0, parentSize.Y - totalPaddingY * 2)
+		local totalPaddingX, paddingRight, totalPaddingY, paddingBottom = UILayout.GetPadding(parent, parentSize)
+		local effectiveWidth = math.max(0, parentSize.X - totalPaddingX - paddingRight)
+		local effectiveHeight = math.max(0, parentSize.Y - totalPaddingY - paddingBottom)
 		local effectiveSize = Vector2.new(effectiveWidth, effectiveHeight)
 
 		local padX = object.PaddingX.Scale * effectiveSize.X + object.PaddingX.Offset
@@ -203,7 +182,7 @@ local propTable = {
 				local colAlign = (colDef and colDef.HorizontalAlignment) or object.HorizontalAlignment
 
 				-- Cell size (use child's own size, clamped to column width minus padding)
-				local cellSize = cell.Size:ToPixels(Vector2.new(colW, rowH))
+				local cellSize = UILayout.GetSize(cell, Vector2.new(colW, rowH))
 				local cellW = math.min(cellSize.X, colW - padX * 2)
 				local cellH = math.min(cellSize.Y, rowH)
 

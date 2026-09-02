@@ -1,13 +1,33 @@
 local logic = {}
 
+local Argon = require("@Argon")
 local Enum = require("@EnumMap")
 local MouseCursor = require("@Kinemium.MouseCursor")
 local signal = require("@Kinemium.signal")
 
-function logic:Step(object, lib, callbackHover, callbackLeave)
-	if object.MouseIsInObject == true then
+local LEFT_MOUSE_BUTTON = Argon.MouseButton.Left
+local RIGHT_MOUSE_BUTTON = Argon.MouseButton.Right
+local buttonStates = setmetatable({}, { __mode = "k" })
+
+local function getButtonState(object)
+	local state = buttonStates[object]
+	if not state then
+		state = {
+			leftCaptured = false,
+			rightCaptured = false,
+		}
+		buttonStates[object] = state
+	end
+	return state
+end
+
+function logic:Step(object, _window, callbackHover, callbackLeave)
+	local hovered = object.MouseIsInObject == true
+	local state = getButtonState(object)
+
+	if hovered then
 		if object.ChangeCursorOnHover then
-			MouseCursor.request(Enum.KinemiumMouseCursor.MOUSE_CURSOR_POINTING_HAND.Value)
+			--MouseCursor.request(Enum.KinemiumMouseCursor.MOUSE_CURSOR_POINTING_HAND.Value)
 		end
 
 		if object.AutoButtonColor then
@@ -17,16 +37,9 @@ function logic:Step(object, lib, callbackHover, callbackLeave)
 		if callbackHover then
 			callbackHover()
 		end
-
-		local left = lib.IsMouseButtonDown(0)
-		local right = lib.IsMouseButtonDown(1)
-
-		object.MouseButton1Click:FireOncePerPress("LeftMouse", left)
-		object.MouseButton2Click:FireOncePerPress("RightMouse", right)
-		object.Activated:FireOncePerPress("LeftMouse", left)
 	else
 		if object.ChangeCursorOnHover then
-			MouseCursor.request(Enum.KinemiumMouseCursor.MOUSE_CURSOR_DEFAULT.Value)
+			--MouseCursor.request(Enum.KinemiumMouseCursor.MOUSE_CURSOR_DEFAULT.Value)
 		end
 
 		if object.AutoButtonColor then
@@ -35,6 +48,31 @@ function logic:Step(object, lib, callbackHover, callbackLeave)
 
 		if callbackLeave then
 			callbackLeave()
+		end
+	end
+
+	if hovered and Argon:IsMouseButtonPressed(LEFT_MOUSE_BUTTON) then
+		state.leftCaptured = true
+		object.MouseButton1Down:Fire()
+	end
+	if hovered and Argon:IsMouseButtonPressed(RIGHT_MOUSE_BUTTON) then
+		state.rightCaptured = true
+		object.MouseButton2Down:Fire()
+	end
+
+	if Argon:IsMouseButtonReleased(LEFT_MOUSE_BUTTON) and state.leftCaptured then
+		state.leftCaptured = false
+		object.MouseButton1Up:Fire()
+		if hovered then
+			object.MouseButton1Click:Fire()
+			object.Activated:Fire()
+		end
+	end
+	if Argon:IsMouseButtonReleased(RIGHT_MOUSE_BUTTON) and state.rightCaptured then
+		state.rightCaptured = false
+		object.MouseButton2Up:Fire()
+		if hovered then
+			object.MouseButton2Click:Fire()
 		end
 	end
 end

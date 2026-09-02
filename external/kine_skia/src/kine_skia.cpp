@@ -24,6 +24,8 @@
 #include "include/core/SkFontMetrics.h"
 #include "include/core/SkMaskFilter.h"
 #include "include/effects/SkImageFilters.h"
+#include "include/effects/SkRuntimeEffect.h"
+#include <cstdint>
 #if defined(_WIN32)
 #include "include/ports/SkTypeface_win.h"
 #elif defined(__APPLE__)
@@ -58,6 +60,7 @@
 #include <cstring>
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -82,6 +85,13 @@ struct KineSkiaVulkanContext {
 #endif
 };
 
+struct KineSkiaRuntimeShader {
+    sk_sp<SkRuntimeEffect> effect;
+    std::unique_ptr<SkRuntimeShaderBuilder> builder;
+};
+
+static thread_local std::string kine_skia_shader_error;
+
 /* ---------------- Paint helpers ---------------- */
 
 static SkPaint kine_skia_paint(uint8_t r, uint8_t g, uint8_t b, uint8_t a, float strokeWidth)
@@ -96,6 +106,75 @@ static SkPaint kine_skia_paint(uint8_t r, uint8_t g, uint8_t b, uint8_t a, float
         paint.setStyle(SkPaint::kFill_Style);
     }
     return paint;
+}
+
+KINE_SKIA_API KineSkiaRuntimeShader* Kine_Skia_RuntimeShader_Create(const char* sksl)
+{
+    kine_skia_shader_error.clear();
+    if (!sksl || !*sksl) {
+        kine_skia_shader_error = "SkSL source is empty";
+        return nullptr;
+    }
+    auto result = SkRuntimeEffect::MakeForShader(SkString(sksl));
+    if (!result.effect) {
+        kine_skia_shader_error = result.errorText.c_str();
+        return nullptr;
+    }
+    auto* shader = new KineSkiaRuntimeShader();
+    shader->effect = std::move(result.effect);
+    shader->builder = std::make_unique<SkRuntimeShaderBuilder>(shader->effect);
+    return shader;
+}
+
+KINE_SKIA_API void Kine_Skia_RuntimeShader_Destroy(KineSkiaRuntimeShader* shader)
+{
+    delete shader;
+}
+
+KINE_SKIA_API bool Kine_Skia_RuntimeShader_SetUniform(
+    KineSkiaRuntimeShader* shader, const char* name, const float* values, int valueCount)
+{
+    if (!shader || !shader->effect || !shader->builder || !name || !values || valueCount <= 0) {
+        return false;
+    }
+    const SkRuntimeEffect::Uniform* uniform = shader->effect->findUniform(name);
+    if (!uniform || uniform->sizeInBytes() != sizeof(float) * static_cast<size_t>(valueCount)) {
+        return false;
+    }
+
+    using UniformType = SkRuntimeEffect::Uniform::Type;
+    switch (uniform->type) {
+        case UniformType::kInt:
+        case UniformType::kInt2:
+        case UniformType::kInt3:
+        case UniformType::kInt4: {
+            int32_t integerValues[4] = {};
+            for (int index = 0; index < valueCount; ++index) {
+                integerValues[index] = static_cast<int32_t>(values[index]);
+            }
+            return shader->builder->uniform(name).set(integerValues, valueCount);
+        }
+        default:
+            return shader->builder->uniform(name).set(values, valueCount);
+    }
+}
+
+KINE_SKIA_API void Kine_Skia_Surface_DrawRuntimeShaderRect(
+    KineSkiaSurface* surface, KineSkiaRuntimeShader* shader,
+    float x, float y, float width, float height)
+{
+    if (!surface || !surface->surface || !shader || !shader->builder || width <= 0 || height <= 0) {
+        return;
+    }
+    SkPaint paint;
+    paint.setAntiAlias(true);
+    paint.setShader(shader->builder->makeShader());
+    surface->surface->getCanvas()->drawRect(SkRect::MakeXYWH(x, y, width, height), paint);
+}
+
+KINE_SKIA_API const char* Kine_Skia_RuntimeShader_GetLastError(void)
+{
+    return kine_skia_shader_error.c_str();
 }
 
 static SkPath kine_skia_squircle_path(
@@ -388,7 +467,7 @@ KINE_SKIA_API int Kine_Skia_Surface_GetHeight(const KineSkiaSurface* surface)
     return surface && surface->surface ? surface->surface->height() : 0;
 }
 
-KINE_SKIA_API size_t Kine_Skia_Surface_GetRowBytes(const KineSkiaSurface* surface)
+KINE_SKIA_API uint32_t Kine_Skia_Surface_GetRowBytes(const KineSkiaSurface* surface)
 {
     if (!surface || !surface->surface) {
         return 0;
@@ -399,7 +478,7 @@ KINE_SKIA_API size_t Kine_Skia_Surface_GetRowBytes(const KineSkiaSurface* surfac
         return 0;
     }
 
-    return pixmap.rowBytes();
+    return static_cast<uint32_t>(pixmap.rowBytes());
 }
 
 KINE_SKIA_API void* Kine_Skia_Surface_GetPixels(KineSkiaSurface* surface)
@@ -511,6 +590,24 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawRect(
 
     SkPaint paint = kine_skia_paint(r, g, b, a, strokeWidth);
     surface->surface->getCanvas()->drawRect(SkRect::MakeXYWH(x, y, width, height), paint);
+}
+
+KINE_SKIA_API void Kine_Skia_Surface_DrawRotatedRect(
+    KineSkiaSurface* surface,
+    float centerX, float centerY, float width, float height, float rotationDegrees,
+    uint8_t r, uint8_t g, uint8_t b, uint8_t a,
+    float strokeWidth)
+{
+    if (!surface || !surface->surface || width <= 0.0f || height <= 0.0f) {
+        return;
+    }
+
+    SkCanvas* canvas = surface->surface->getCanvas();
+    SkAutoCanvasRestore restore(canvas, true);
+    canvas->rotate(rotationDegrees, centerX, centerY);
+    canvas->drawRect(
+        SkRect::MakeXYWH(centerX - width * 0.5f, centerY - height * 0.5f, width, height),
+        kine_skia_paint(r, g, b, a, strokeWidth));
 }
 
 KINE_SKIA_API void Kine_Skia_Surface_DrawRoundRect(
@@ -861,6 +958,84 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawText(
     paint.setColor(SkColorSetARGB(a, r, g, b));
 
     surface->surface->getCanvas()->drawTextBlob(blob, x, y, paint);
+}
+
+KINE_SKIA_API void Kine_Skia_Surface_DrawTextShadow(
+    KineSkiaSurface* surface,
+    const char* text,
+    float x, float y,
+    float fontSize,
+    const char* fontPath,
+
+    float offsetX,
+    float offsetY,
+    float blurSigma,
+    float spread,
+
+    uint8_t shadowR,
+    uint8_t shadowG,
+    uint8_t shadowB,
+    uint8_t shadowA)
+{
+    if (!surface || !surface->surface || !text || !text[0] ||
+        fontSize <= 0.0f || shadowA == 0) {
+        return;
+    }
+
+    sk_sp<SkTypeface> typeface = kine_skia_get_typeface(fontPath);
+
+    if (!typeface) {
+        return;
+    }
+
+    SkFont font(typeface, fontSize);
+    font.setEdging(SkFont::Edging::kAntiAlias);
+
+    sk_sp<SkTextBlob> blob = SkTextBlob::MakeFromText(
+        text,
+        strlen(text),
+        font,
+        SkTextEncoding::kUTF8
+    );
+
+    if (!blob) {
+        return;
+    }
+
+    SkPaint shadowPaint;
+    shadowPaint.setAntiAlias(true);
+    shadowPaint.setColor(
+        SkColorSetARGB(
+            shadowA,
+            shadowR,
+            shadowG,
+            shadowB
+        )
+    );
+
+    if (spread > 0.0f) {
+        shadowPaint.setStyle(SkPaint::kStrokeAndFill_Style);
+        shadowPaint.setStrokeWidth(spread * 2.0f);
+        shadowPaint.setStrokeJoin(SkPaint::kRound_Join);
+    } else {
+        shadowPaint.setStyle(SkPaint::kFill_Style);
+    }
+
+    if (blurSigma > 0.0f) {
+        shadowPaint.setMaskFilter(
+            SkMaskFilter::MakeBlur(
+                kNormal_SkBlurStyle,
+                blurSigma
+            )
+        );
+    }
+
+    surface->surface->getCanvas()->drawTextBlob(
+        blob,
+        x + offsetX,
+        y + offsetY,
+        shadowPaint
+    );
 }
 
 KINE_SKIA_API float Kine_Skia_Surface_MeasureText(

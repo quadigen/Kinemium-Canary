@@ -160,6 +160,8 @@ UserInputService.MouseWheel:Connect(function(input)
 	end
 end)
 
+workspace.Camera.CameraType = Enum.CameraType.Scriptable
+
 RunService.RenderStepped:Connect(function(dt)
 	local delta = UserInputService:GetMouseDelta()
 
@@ -228,7 +230,9 @@ RunService.RenderStepped:Connect(function(dt)
 	else
 		localPlayer.CameraMode = Enum.CameraMode.Classic
 
-		local focusPos = head.CFrame.Position
+		-- Frame the whole Poppy-style rig rather than pinning the camera to the
+		-- head, which left the lower legs outside the viewport.
+		local focusPos = rootPart.CFrame.Position + Vector3.new(0, -0.2, 0)
 		local camOffset = camRot * Vector3.new(0, 0, zoomDist)
 		local targetCamPos = focusPos + camOffset
 

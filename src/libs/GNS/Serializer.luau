@@ -111,6 +111,8 @@ local TYPE_KNOWN_STRING = 9
 -- configuration
 Serializer.CompressionEnabled = true
 Serializer.MaxDepth = 100
+Serializer.MaxPacketBytes = 1024 * 1024
+Serializer.MaxDecompressedBytes = 8 * 1024 * 1024
 
 -- custom type registry
 local customTypes = {}
@@ -460,13 +462,31 @@ function Serializer.Serialize(value)
 end
 
 function Serializer.Deserialize(b)
+	if type(b) ~= "buffer" and type(b) ~= "userdata" then
+		error("Serializer.Deserialize: expected a buffer")
+	end
+	if buffer.len(b) > Serializer.MaxPacketBytes then
+		error("Serializer.Deserialize: packet exceeds size limit")
+	end
 	local decompressed
 	if Serializer.CompressionEnabled then
 		decompressed = serde.zstd.decompress(b)
 	else
 		decompressed = b
 	end
-	local value, _ = readValue(decompressed, 0)
+	if buffer.len(decompressed) > Serializer.MaxDecompressedBytes then
+		error("Serializer.Deserialize: decompressed packet exceeds size limit")
+	end
+	local value, finalOffset = readValue(decompressed, 0)
+	if finalOffset > buffer.len(decompressed) then
+		error("Serializer.Deserialize: malformed packet")
+	end
+	return value
+end
+
+function Serializer.DeserializeSafe(b)
+	local ok, value = pcall(Serializer.Deserialize, b)
+	if not ok then return nil, tostring(value) end
 	return value
 end
 

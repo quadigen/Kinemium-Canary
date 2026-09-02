@@ -41,10 +41,14 @@ for _, entry in pairs(entries) do
 		returned = result
 	else
 		local source = zembed.readFile(requirePath)
-		local r, s, result = kilang:execute(source, {
+		local id, s, result, _, getResult = kilang:execute(source, {
 			SecurityCapabilities = Enum.SecurityCapabilities.Internals,
 			StackId = requirePath,
 		})
+		if getResult then
+			s, result = getResult()
+		end
+		kilang:remove(id)
 		initTime = (os.clock() - createClassStart) * 1000
 
 		if not s then

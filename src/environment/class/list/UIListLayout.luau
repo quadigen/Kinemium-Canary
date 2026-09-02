@@ -2,6 +2,7 @@
 local Vector2 = require("@Vector2")
 local Enum = require("@EnumMap")
 local UDim = require("@UDim")
+local UILayout = require("@UILayout")
 
 local propTable = {
 	FillDirection = Enum.FillDirection.Vertical,
@@ -15,7 +16,7 @@ local propTable = {
 	Virtualized = true,
 	Overscan = 100,
 
-	render = function(lib, object, dt, structs)
+	render = function(surface, object)
 		if not object.Enabled then
 			return
 		end
@@ -28,37 +29,16 @@ local propTable = {
 		--------------------------------------------------
 		-- Utility
 		--------------------------------------------------
-		local function GetAbsoluteSize(obj)
-			if obj.AbsoluteSize then
-				return obj.AbsoluteSize
-			end
-
-			if obj:IsA("ScreenGui") then
-				local dpiScale = lib.GetWindowScaleDPI()
-				return Vector2.new(lib.GetRenderWidth() / dpiScale.X, lib.GetRenderHeight() / dpiScale.Y)
-			end
-
-			local parentSize = GetAbsoluteSize(obj.Parent)
-			return obj.Size:ToPixels(parentSize)
-		end
-
-		local parentSize = GetAbsoluteSize(parent)
+		local parentSize = UILayout.GetAbsoluteSize(parent, surface)
 
 		--------------------------------------------------
 		-- Padding
 		--------------------------------------------------
-		local paddingX, paddingY = 0, 0
-
-		for _, child in ipairs(parent:GetChildren()) do
-			if child.ClassName == "UIPadding" then
-				local px = child.Padding:ToPixels(parentSize)
-				paddingX += px.X
-				paddingY += px.Y
-			end
-		end
-
-		local containerSize =
-			Vector2.new(math.max(0, parentSize.X - paddingX * 2), math.max(0, parentSize.Y - paddingY * 2))
+		local paddingX, paddingRight, paddingY, paddingBottom = UILayout.GetPadding(parent, parentSize)
+		local containerSize = Vector2.new(
+			math.max(0, parentSize.X - paddingX - paddingRight),
+			math.max(0, parentSize.Y - paddingY - paddingBottom)
+		)
 
 		local isVertical = object.FillDirection == Enum.FillDirection.Vertical
 		local mainSize = isVertical and containerSize.Y or containerSize.X
@@ -101,7 +81,7 @@ local propTable = {
 		local totalBasis = 0
 
 		for _, child in ipairs(children) do
-			local size = child.Size:ToPixels(containerSize)
+			local size = UILayout.GetSize(child, containerSize)
 
 			local basis = isVertical and size.Y or size.X
 			local cross = isVertical and size.X or size.Y

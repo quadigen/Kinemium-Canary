@@ -10,6 +10,7 @@ local fs = zune.fs
 
 local aliases = {}
 local HEADLESS_SKIP_INIT = {
+	CoreGui = true,
 	FileDialogService = true,
 	GuiStackService = true,
 	KinemiumFontService = true,
@@ -82,10 +83,15 @@ function DataModel.new(RENDERER, ...)
 			success, returnedData = pcall(require, path)
 		else
 			local read = zembed.readFile(path)
-			stack, success, returnedData = kilang:execute(read, {
+			local getResult
+			stack, success, returnedData, _, getResult = kilang:execute(read, {
 				SecurityCapabilities = Enum.SecurityCapabilities.Internals,
 				StackId = path,
 			})
+			if getResult then
+				success, returnedData = getResult()
+				kilang:remove(stack)
+			end
 		end
 		local initTime = (os.clock() - addServiceStart) * 1000
 

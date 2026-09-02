@@ -1,4 +1,5 @@
 local RunService = game:GetService("RunService")
+local Selection = game:GetService("Selection")
 local StudioThemeService = game:GetService("StudioThemeService")
 local Immco = require("@Immco")
 local theme = StudioThemeService.SelectedTheme
@@ -16,6 +17,8 @@ end
 repeat
 	task.wait()
 until game.CoreGui:FindFirstChild("Studio")
+
+local widget
 
 local Viewport = Instance.new("Frame")
 Viewport.Name = "Viewport"
@@ -72,33 +75,6 @@ renderer.Pool.new("2d", function()
 		end
 	end
 
-	for _, btn in pairs(buttons) do
-		local btnRect = rects[btn.iconPath]
-		if not btnRect then
-			continue
-		end
-		Immco.Tooltip({
-			RetainedStorage = retained,
-			id = btn.iconPath,
-			renderer = renderer,
-			canvas = renderer.AboveCanvas,
-			window = renderer.Window,
-			theme = theme,
-
-			HoverRect = btnRect,
-			Text = btn.tooltip,
-
-			HoverDelay = 0.4,
-			FadeSpeed = 14,
-			Placement = "right",
-			Offset = { x = 12, y = 40 },
-			Gap = 8,
-			MaxWidth = 220,
-			Padding = 6,
-			CornerRadius = 6,
-		}, dt)
-	end
-
 	Immco.Widget({
 		x = absolutePosition.X,
 		y = absolutePosition.Y + 5,
@@ -107,82 +83,177 @@ renderer.Pool.new("2d", function()
 		title = "Viewport",
 		theme = theme,
 		engine_window = renderer.Window,
+		renderer = renderer,
 
 		callback = function(params)
 			renderer:Set3DTexProps(absolutePosition.X, absolutePosition.Y + 35, absoluteSize.X, absoluteSize.Y - 35)
-
-			Immco.RoundedRectangle({
-				x = absolutePosition.X + 8,
-				y = absolutePosition.Y + 38,
-				width = 44,
-				height = math.max(100, (#buttons * 40) + 10),
-				theme = theme,
-				Color = Argon:RGBA(70, 70, 70),
-				engine_window = renderer.AboveCanvas,
-			}, dt)
-
-			Immco.RoundedRectangle({
-				x = absolutePosition.X + 10,
-				y = absolutePosition.Y + 40,
-				width = 40,
-				height = math.max(80, (#buttons * 40) + 5),
-				theme = theme,
-				Color = Argon:RGBA(44, 44, 44),
-				engine_window = renderer.AboveCanvas,
-
-				callback = function(params)
-					for i, btn in ipairs(buttons) do
-						local btnRect = {
-							x = params.x + 2.5,
-							y = params.y + 5 + ((i - 1) * 40),
-							width = 35,
-							height = 35,
-						}
-						rects[btn.iconPath] = btnRect
-						local isInRect = renderer:isMouseInRect(btnRect)
-
-						Immco.ImageButton({
-							x = params.x + 2.5,
-							y = params.y + 5 + ((i - 1) * 40),
-							width = 35,
-							height = 35,
-							Image = Argon:CreateImageFromPath(btn.iconPath),
-							Color = isInRect and Argon:RGBA(33, 33, 33) or Argon:RGBA(44, 44, 44),
-							padding = 2.5,
-							preserveAspectRatio = false,
-							imageAspectRatio = 0.1,
-							imageWidth = 80,
-							imageHeight = 80,
-							theme = theme,
-							engine_window = renderer.AboveCanvas,
-						}, dt)
-
-						if
-							renderer:HasClicked({
-								x = params.x + 2.5,
-								y = params.y + 5 + ((i - 1) * 40),
-								width = 35,
-								height = 35,
-							})
-						then
-							btn.clicked()
-						end
-
-						if i < #buttons then
-							Immco.RoundedRectangle({
-								x = (params.x + 2.5) - 3,
-								y = params.y + 40 + ((i - 1) * 40),
-								width = 40,
-								height = 2,
-								CornerRadius = 1,
-								Color = Argon:RGBA(70, 70, 70),
-								theme = theme,
-								engine_window = renderer.AboveCanvas,
-							})
-						end
-					end
-				end,
-			}, dt)
+			widget = params
 		end,
 	}, dt)
+end)
+
+renderer.Pool.new("2da", function()
+	local params = widget
+
+	if not params then
+		return
+	end
+
+	local dt = renderer.RuntimeLibrary.dt
+	local absolutePosition = Viewport.AbsolutePosition
+	local absoluteSize = Viewport.AbsoluteSize
+
+	local selected = Selection.Get()
+	local items = {}
+	local object = selected and selected[1]
+
+	if selected and object then
+		local path = object:GetFullName()
+		local split = string.split(path, ".")
+
+		for _, item in pairs(split) do
+			table.insert(items, {
+				Text = item,
+
+				OnClick = function()
+					Selection.Clear()
+					Selection.Set({ object })
+				end,
+			})
+		end
+	end
+
+	Immco.Breadcrumb({
+		x = absolutePosition.X + 8,
+		y = absolutePosition.Y + absoluteSize.Y - 35,
+		height = 32,
+
+		engine_window = renderer.Window,
+		renderer = renderer,
+		theme = theme,
+
+		Collapsed = true,
+		Items = items,
+
+		OnEllipsisClick = function(hiddenItems) end,
+	}, dt)
+
+	local toolbarX = absolutePosition.X + 10
+	local toolbarY = absolutePosition.Y + 40
+
+	local buttonSize = 40
+	local iconSize = 30
+
+	local buttonItems = {}
+
+	for i, btn in ipairs(buttons) do
+		local btnRect = {
+			x = toolbarX,
+			y = toolbarY + ((i - 1) * buttonSize),
+			width = buttonSize,
+			height = buttonSize,
+		}
+
+		rects[btn.iconPath] = btnRect
+
+		table.insert(buttonItems, {
+			Icon = Argon:CreateImageFromPath(btn.iconPath),
+
+			Width = buttonSize,
+			Height = buttonSize,
+
+			IconSize = iconSize,
+
+			OnClick = function()
+				btn.clicked()
+			end,
+		})
+	end
+
+	Immco.RoundedRectangle({
+		x = toolbarX - 2,
+		y = toolbarY - 2,
+
+		width = buttonSize + 4,
+		height = (#buttons * buttonSize) + 4,
+
+		CornerRadius = 6,
+
+		Color = Argon:RGBA(70, 70, 70),
+
+		theme = theme,
+		engine_window = renderer.Window,
+	}, dt)
+
+	Immco.ButtonGroup({
+		x = toolbarX,
+		y = toolbarY,
+
+		width = buttonSize,
+
+		engine_window = renderer.Window,
+		renderer = renderer,
+		theme = theme,
+
+		Orientation = "vertical",
+
+		ItemHeight = buttonSize,
+		IconSize = iconSize,
+		PaddingX = 0,
+
+		CornerRadius = 4,
+
+		BackgroundColor = Argon:RGBA(44, 44, 44),
+		ButtonColor = Argon:RGBA(44, 44, 44),
+
+		HoverColor = Argon:RGBA(33, 33, 33),
+		PressedColor = Argon:RGBA(25, 25, 25),
+
+		BorderColor = Argon:RGBA(70, 70, 70),
+		DividerColor = Argon:RGBA(70, 70, 70),
+
+		ShowBorder = false,
+		ShowDividers = true,
+
+		Items = buttonItems,
+	}, dt)
+
+	-- Tooltips
+	for _, btn in pairs(buttons) do
+		local btnRect = rects[btn.iconPath]
+
+		if not btnRect then
+			continue
+		end
+
+		Immco.Tooltip({
+			RetainedStorage = retained,
+
+			id = btn.iconPath,
+
+			renderer = renderer,
+			canvas = renderer.Window,
+			window = renderer.Window,
+
+			theme = theme,
+
+			HoverRect = btnRect,
+			Text = btn.tooltip,
+
+			HoverDelay = 0.4,
+			FadeSpeed = 14,
+
+			Placement = "right",
+
+			Offset = {
+				x = 12,
+				y = 40,
+			},
+
+			Gap = 8,
+			MaxWidth = 220,
+			Padding = 6,
+			CornerRadius = 6,
+		}, dt)
+	end
 end)

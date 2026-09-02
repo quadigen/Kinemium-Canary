@@ -1,5 +1,6 @@
 -- description: "Enables asynchronous communication between the client and server."
 local signal = require("@Kinemium.signal")
+local RemoteBridge = require("@RemoteBridge")
 
 return {
 	class = "RemoteEvent",
@@ -10,9 +11,9 @@ return {
 		instance:SetProperties({
 			OnClientEvent = OnClientEvent,
 			OnServerEvent = OnServerEvent,
-			-- FireServer, FireClient, FireAllClients are injected by the networking bridge
 		})
+		RemoteBridge.BindEvent(instance, datamodel, true)
 
 		return instance
-	end,	
+	end,
 }

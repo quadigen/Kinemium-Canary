@@ -169,6 +169,15 @@ local JPH_PhysicsSystem_OptimizeBroadPhase = { returns = void, args = { ptr } }
 --                                           JPH_ContactListenerRef)
 local JPH_PhysicsSystem_SetContactListener = { returns = void, args = { ptr, ptr } }
 
+-- int32_t JPH_PhysicsSystem_CastRay(JPH_PhysicsSystemRef,
+--   const JPH_RVec3* origin, const JPH_Vec3* direction,
+--   const JPH_BodyID* bodyIDs, uint32_t bodyIDCount, int32_t filterMode,
+--   JPH_RayCastResult* outResult)
+local JPH_PhysicsSystem_CastRay = {
+	returns = i32,
+	args = { ptr, ptr, ptr, ptr, u32, i32, ptr },
+}
+
 -- ─── Body interface ───────────────────────────────────────────────────────────
 
 -- JPH_BodyRef JPH_BodyInterface_CreateBody(JPH_BodyInterfaceRef,
@@ -311,6 +320,39 @@ local JPH_ContactListener_Destroy = { returns = void, args = { ptr } }
 -- Pass maxEvents = 0 to drain the entire queue.
 local JPH_ContactListener_PollEvents = { returns = u32, args = { ptr, ptr, u32 } }
 
+-- ─── Constraints ─────────────────────────────────────────────────────────────
+
+local JPH_PhysicsSystem_AddConstraint = { returns = void, args = { ptr, ptr } }
+local JPH_PhysicsSystem_RemoveConstraint = { returns = void, args = { ptr, ptr } }
+local JPH_FixedConstraintSettings_Init = { returns = void, args = { ptr } }
+local JPH_FixedConstraint_Create = { returns = ptr, args = { ptr, ptr, ptr } }
+local JPH_DistanceConstraintSettings_Init = { returns = void, args = { ptr } }
+local JPH_DistanceConstraint_Create = { returns = ptr, args = { ptr, ptr, ptr } }
+local JPH_DistanceConstraint_SetDistance = { returns = void, args = { ptr, f32, f32 } }
+local JPH_DistanceConstraint_SetLimitsSpringSettings = { returns = void, args = { ptr, ptr } }
+local JPH_HingeConstraintSettings_Init = { returns = void, args = { ptr } }
+local JPH_HingeConstraint_Create = { returns = ptr, args = { ptr, ptr, ptr } }
+local JPH_HingeConstraint_SetMotorState = { returns = void, args = { ptr, i32 } }
+local JPH_HingeConstraint_SetTargetAngularVelocity = { returns = void, args = { ptr, f32 } }
+local JPH_HingeConstraint_SetTargetAngle = { returns = void, args = { ptr, f32 } }
+local JPH_HingeConstraint_GetCurrentAngle = { returns = f32, args = { ptr } }
+local JPH_HingeConstraint_SetLimits = { returns = void, args = { ptr, f32, f32 } }
+local JPH_HingeConstraint_SetMotorSettings = { returns = void, args = { ptr, ptr } }
+local JPH_SliderConstraintSettings_Init = { returns = void, args = { ptr } }
+local JPH_SliderConstraint_Create = { returns = ptr, args = { ptr, ptr, ptr } }
+local JPH_SliderConstraint_SetLimits = { returns = void, args = { ptr, f32, f32 } }
+local JPH_SliderConstraint_SetMotorSettings = { returns = void, args = { ptr, ptr } }
+local JPH_SliderConstraint_SetMotorState = { returns = void, args = { ptr, i32 } }
+local JPH_SliderConstraint_SetTargetVelocity = { returns = void, args = { ptr, f32 } }
+local JPH_SliderConstraint_SetTargetPosition = { returns = void, args = { ptr, f32 } }
+local JPH_SliderConstraint_GetCurrentPosition = { returns = f32, args = { ptr } }
+local JPH_SixDOFConstraintSettings_Init = { returns = void, args = { ptr } }
+local JPH_SixDOFConstraintSettings_MakeFixedAxis = { returns = void, args = { ptr, u32 } }
+local JPH_SixDOFConstraintSettings_MakeFreeAxis = { returns = void, args = { ptr, u32 } }
+local JPH_SixDOFConstraintSettings_SetLimitedAxis = { returns = void, args = { ptr, u32, f32, f32 } }
+local JPH_SixDOFConstraintSettings_SetLimitsSpringSettings = { returns = void, args = { ptr, u32, ptr } }
+local JPH_SixDOFConstraint_Create = { returns = ptr, args = { ptr, ptr, ptr } }
+
 -- ─────────────────────────────────────────────────────────────────────────────
 
 return {
@@ -360,6 +402,39 @@ return {
 	JPH_PhysicsSystem_Update = JPH_PhysicsSystem_Update,
 	JPH_PhysicsSystem_OptimizeBroadPhase = JPH_PhysicsSystem_OptimizeBroadPhase,
 	JPH_PhysicsSystem_SetContactListener = JPH_PhysicsSystem_SetContactListener,
+	JPH_PhysicsSystem_CastRay = JPH_PhysicsSystem_CastRay,
+	JPH_PhysicsSystem_AddConstraint = JPH_PhysicsSystem_AddConstraint,
+	JPH_PhysicsSystem_RemoveConstraint = JPH_PhysicsSystem_RemoveConstraint,
+
+	-- Constraints
+	JPH_FixedConstraintSettings_Init = JPH_FixedConstraintSettings_Init,
+	JPH_FixedConstraint_Create = JPH_FixedConstraint_Create,
+	JPH_DistanceConstraintSettings_Init = JPH_DistanceConstraintSettings_Init,
+	JPH_DistanceConstraint_Create = JPH_DistanceConstraint_Create,
+	JPH_DistanceConstraint_SetDistance = JPH_DistanceConstraint_SetDistance,
+	JPH_DistanceConstraint_SetLimitsSpringSettings = JPH_DistanceConstraint_SetLimitsSpringSettings,
+	JPH_HingeConstraintSettings_Init = JPH_HingeConstraintSettings_Init,
+	JPH_HingeConstraint_Create = JPH_HingeConstraint_Create,
+	JPH_HingeConstraint_SetMotorState = JPH_HingeConstraint_SetMotorState,
+	JPH_HingeConstraint_SetTargetAngularVelocity = JPH_HingeConstraint_SetTargetAngularVelocity,
+	JPH_HingeConstraint_SetTargetAngle = JPH_HingeConstraint_SetTargetAngle,
+	JPH_HingeConstraint_GetCurrentAngle = JPH_HingeConstraint_GetCurrentAngle,
+	JPH_HingeConstraint_SetLimits = JPH_HingeConstraint_SetLimits,
+	JPH_HingeConstraint_SetMotorSettings = JPH_HingeConstraint_SetMotorSettings,
+	JPH_SliderConstraintSettings_Init = JPH_SliderConstraintSettings_Init,
+	JPH_SliderConstraint_Create = JPH_SliderConstraint_Create,
+	JPH_SliderConstraint_SetLimits = JPH_SliderConstraint_SetLimits,
+	JPH_SliderConstraint_SetMotorSettings = JPH_SliderConstraint_SetMotorSettings,
+	JPH_SliderConstraint_SetMotorState = JPH_SliderConstraint_SetMotorState,
+	JPH_SliderConstraint_SetTargetVelocity = JPH_SliderConstraint_SetTargetVelocity,
+	JPH_SliderConstraint_SetTargetPosition = JPH_SliderConstraint_SetTargetPosition,
+	JPH_SliderConstraint_GetCurrentPosition = JPH_SliderConstraint_GetCurrentPosition,
+	JPH_SixDOFConstraintSettings_Init = JPH_SixDOFConstraintSettings_Init,
+	JPH_SixDOFConstraintSettings_MakeFixedAxis = JPH_SixDOFConstraintSettings_MakeFixedAxis,
+	JPH_SixDOFConstraintSettings_MakeFreeAxis = JPH_SixDOFConstraintSettings_MakeFreeAxis,
+	JPH_SixDOFConstraintSettings_SetLimitedAxis = JPH_SixDOFConstraintSettings_SetLimitedAxis,
+	JPH_SixDOFConstraintSettings_SetLimitsSpringSettings = JPH_SixDOFConstraintSettings_SetLimitsSpringSettings,
+	JPH_SixDOFConstraint_Create = JPH_SixDOFConstraint_Create,
 
 	-- Body interface
 	JPH_BodyInterface_CreateBody = JPH_BodyInterface_CreateBody,

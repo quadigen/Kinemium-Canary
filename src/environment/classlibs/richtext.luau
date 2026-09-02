@@ -19,13 +19,19 @@ end
 
 local imageCache = {}
 
+local function constrainedTextSize(object)
+	local size = math.max(1, object.TextSize or 1)
+	local constraint = object:FindFirstChildOfClass("UITextSizeConstraint")
+	if constraint then
+		size = math.clamp(size, constraint.MinTextSize or 1, constraint.MaxTextSize or math.huge)
+	end
+	return size, constraint
+end
+
 local function getImage(path)
 	if imageCache[path] then
 		return imageCache[path]
 	end
-	-- Argon's adapter already keeps its own path->image cache internally
-	-- (SDLAdapter:CreateImageFromPath), but we still keep a thin local one
-	-- so lookups here don't cross the FFI boundary every draw call.
 	local image = argon:CreateImageFromPath(path)
 	imageCache[path] = image
 	return image
@@ -512,7 +518,7 @@ local function buildLayout(object, runs, frameSize, spacing, renderer, fallbackF
 			return
 		end
 
-		local fontSize = math.max(1, (style.size or object.TextSize) * scale)
+		local fontSize = math.max(1, (style.size or constrainedTextSize(object)) * scale)
 		local font = resolveFont(style.fontName)
 
 		if not wrapEnabled then
@@ -626,7 +632,7 @@ local function buildLayout(object, runs, frameSize, spacing, renderer, fallbackF
 	end
 	local maxWidth = 0
 	local totalHeight = 0
-	local fallbackSize = math.max(1, object.TextSize * scale)
+	local fallbackSize = math.max(1, constrainedTextSize(object) * scale)
 	for _, line in ipairs(lines) do
 		if line.maxSize <= 0 then
 			line.maxSize = fallbackSize
@@ -651,6 +657,9 @@ end
 
 function RichText.GetLayout(object, frameSize, renderer, fallbackFont)
 	local spacing = object.TextSpacing or 0
+	local effectiveTextSize, textConstraint = constrainedTextSize(object)
+	local minTextSize = textConstraint and (textConstraint.MinTextSize or 1) or nil
+	local maxTextSize = textConstraint and (textConstraint.MaxTextSize or math.huge) or nil
 	local objectFont = object.Font
 	local baseFontName
 	if type(objectFont) == "table" and objectFont.Name then
@@ -664,7 +673,7 @@ function RichText.GetLayout(object, frameSize, renderer, fallbackFont)
 	local baseStyle = {
 		color = object.TextColor3,
 		transparency = 0,
-		size = object.TextSize,
+		size = effectiveTextSize,
 		fontName = baseFontName,
 		bold = false,
 		italic = false,
@@ -677,7 +686,9 @@ function RichText.GetLayout(object, frameSize, renderer, fallbackFont)
 	local cacheInvalid = cache.text ~= object.Text
 		or cache.richText ~= object.RichText
 		or cache.baseFontName ~= baseFontName
-		or cache.textSize ~= object.TextSize
+		or cache.textSize ~= effectiveTextSize
+		or cache.minTextSize ~= minTextSize
+		or cache.maxTextSize ~= maxTextSize
 		or cache.textColor ~= object.TextColor3
 		or cache.textTransparency ~= object.TextTransparency
 		or cache.spacing ~= spacing
@@ -712,6 +723,11 @@ function RichText.GetLayout(object, frameSize, renderer, fallbackFont)
 			local scaleX = layout.maxWidth > 0 and (frameSize.X / layout.maxWidth) or 1
 			local scaleY = layout.totalHeight > 0 and (frameSize.Y / layout.totalHeight) or 1
 			local scale = math.min(scaleX, scaleY)
+			if textConstraint then
+				local minScale = minTextSize / effectiveTextSize
+				local maxScale = maxTextSize / effectiveTextSize
+				scale = math.clamp(scale, minScale, maxScale)
+			end
 			if scale > 0 and scale ~= 1 then
 				layout = buildLayout(object, runs, frameSize, spacing, renderer, resolvedFont, scale)
 			end
@@ -721,7 +737,9 @@ function RichText.GetLayout(object, frameSize, renderer, fallbackFont)
 		cache.text = object.Text
 		cache.richText = object.RichText
 		cache.baseFontName = baseFontName
-		cache.textSize = object.TextSize
+		cache.textSize = effectiveTextSize
+		cache.minTextSize = minTextSize
+		cache.maxTextSize = maxTextSize
 		cache.textColor = object.TextColor3
 		cache.textTransparency = object.TextTransparency
 		cache.spacing = spacing
@@ -743,6 +761,7 @@ function RichText.DrawLayout(drawLib, window, object, framePos, frameSize, layou
 	end
 
 	local offsetY = 0
+
 	if object.TextYAlignment == Enum.TextYAlignment.Center then
 		offsetY = (frameSize.Y - layout.totalHeight) * 0.5
 	elseif object.TextYAlignment == Enum.TextYAlignment.Bottom then
@@ -751,8 +770,10 @@ function RichText.DrawLayout(drawLib, window, object, framePos, frameSize, layou
 
 	local drawY = framePos.Y + offsetY
 	local drawStroke = object.TextStrokeTransparency < 1
+
 	for _, line in ipairs(layout.lines) do
 		local lineOffsetX = 0
+
 		if object.TextXAlignment == Enum.TextXAlignment.Center then
 			lineOffsetX = (frameSize.X - line.width) * 0.5
 		elseif object.TextXAlignment == Enum.TextXAlignment.Right then
@@ -760,6 +781,7 @@ function RichText.DrawLayout(drawLib, window, object, framePos, frameSize, layou
 		end
 
 		local drawX = framePos.X + lineOffsetX
+
 		for _, segment in ipairs(line.segments) do
 			if segment.type == "image" then
 				local image = getImage(segment.path)
@@ -779,51 +801,55 @@ function RichText.DrawLayout(drawLib, window, object, framePos, frameSize, layou
 				continue
 			end
 
-			local segmentTransparency = combineTransparency(object.TextTransparency, segment.transparency)
-			if segmentTransparency < 1 then
-				if not segment then
-					continue
-				end
-				if not segment.font then
-					continue
-				end
-				if not segment.text then
-					continue
-				end
-				if not segment.size then
-					continue
-				end
+			if not segment.font or not segment.text or not segment.size then
+				drawX += segment.width or 0
+				continue
+			end
 
+			local segmentTransparency = combineTransparency(object.TextTransparency, segment.transparency)
+
+			if segmentTransparency < 1 then
 				local segmentColor = resolveColor3(segment.color, segmentTransparency)
+
+				local segmentTopY = drawY + (line.height - segment.size) * 0.5
+
+				local fontAscent = drawLib:GetFontAscent(segment.size, segment.font)
+
+				local baselineY = segmentTopY + fontAscent
 
 				if drawStroke then
 					local strokeTransparency = combineTransparency(segmentTransparency, object.TextStrokeTransparency)
+
 					if strokeTransparency < 1 then
 						local strokeColor = resolveColor3(object.TextStrokeColor, strokeTransparency)
+
 						drawLib:DrawText(window, segment.text, {
 							X = drawX - 1,
-							Y = drawY,
+							Y = baselineY,
 							TextSize = segment.size,
 							Font = segment.font,
 							Color = strokeColor,
 						})
+
 						drawLib:DrawText(window, segment.text, {
 							X = drawX + 1,
-							Y = drawY,
+							Y = baselineY,
 							TextSize = segment.size,
 							Font = segment.font,
 							Color = strokeColor,
 						})
+
 						drawLib:DrawText(window, segment.text, {
 							X = drawX,
-							Y = drawY - 1,
+							Y = baselineY - 1,
 							TextSize = segment.size,
 							Font = segment.font,
 							Color = strokeColor,
 						})
+
 						drawLib:DrawText(window, segment.text, {
 							X = drawX,
-							Y = drawY + 1,
+							Y = baselineY + 1,
 							TextSize = segment.size,
 							Font = segment.font,
 							Color = strokeColor,
@@ -833,7 +859,7 @@ function RichText.DrawLayout(drawLib, window, object, framePos, frameSize, layou
 
 				drawLib:DrawText(window, segment.text, {
 					X = drawX,
-					Y = drawY,
+					Y = baselineY,
 					TextSize = segment.size,
 					Font = segment.font,
 					Color = segmentColor,
@@ -842,7 +868,7 @@ function RichText.DrawLayout(drawLib, window, object, framePos, frameSize, layou
 				if segment.bold then
 					drawLib:DrawText(window, segment.text, {
 						X = drawX + 1,
-						Y = drawY,
+						Y = baselineY,
 						TextSize = segment.size,
 						Font = segment.font,
 						Color = segmentColor,
@@ -851,8 +877,10 @@ function RichText.DrawLayout(drawLib, window, object, framePos, frameSize, layou
 
 				if segment.underline or segment.strike then
 					local lineThickness = math.max(1, math.floor((segment.size * 0.08) + 0.5))
+
 					if segment.underline then
-						local underlineY = drawY + segment.size
+						local underlineY = segmentTopY + segment.size
+
 						drawLib:DrawRectangle(window, {
 							x = math.floor(drawX),
 							y = math.floor(underlineY),
@@ -861,8 +889,10 @@ function RichText.DrawLayout(drawLib, window, object, framePos, frameSize, layou
 							Color = segmentColor,
 						})
 					end
+
 					if segment.strike then
-						local strikeY = drawY + (segment.size * 0.55)
+						local strikeY = segmentTopY + (segment.size * 0.55)
+
 						drawLib:DrawRectangle(window, {
 							x = math.floor(drawX),
 							y = math.floor(strikeY),

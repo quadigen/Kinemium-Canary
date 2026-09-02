@@ -282,10 +282,12 @@ return function(renderer, Kinemium_camera)
 	local terrainObject = Terrain.InitRenderer(renderer, renderer.Signal, mainDatamodel)
 
 	local players = mainDatamodel:GetService("Players")
-	if not IsServer and playerGui then
+	if not IsServer and playerGui and players and players.LocalPlayer then
 		players.LocalPlayer.PlayerGui = playerGui
 
 		playerGui.Parent = players.LocalPlayer
+	elseif not IsServer and playerGui then
+		warn("Players.LocalPlayer was unavailable while attaching PlayerGui")
 	end
 
 	Kinemium_camera.Parent = mainDatamodel:GetService("Workspace")
@@ -344,6 +346,13 @@ return function(renderer, Kinemium_camera)
 			print("Successfully included header " .. object.Name)
 		end
 	end
+
+	data.IsClient = _G.IsClient == true
+	data.IsServer = _G.IsServer == true
+	data.IsHeadless = _G.IsHeadless == true
+	data.IsExecutable = _G.IsExecutable == true
+	data.FlagExists = _G.FlagExists
+	data.GetFlagValue = _G.GetFlagValue
 
 	-- set zune as 0 to override zune global in sandboxed scripts
 	data.zune = 0

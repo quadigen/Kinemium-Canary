@@ -240,9 +240,14 @@ function KiRend.new(config: KiRendConf)
 	local perf_stats = {
 		frame_ms = 0,
 		fps = 0,
+		frame_setup_ms = 0,
 		update_ms = 0,
+		render_ms = 0,
+		afterstep_ms = 0,
 		render3d_ms = 0,
 		ui_ms = 0,
+		ui_base_ms = 0,
+		ui_overlay_ms = 0,
 		gui_roots = 0,
 		scene_roots_3d = 0,
 		mesh_calls = 0,
@@ -255,12 +260,22 @@ function KiRend.new(config: KiRendConf)
 		call3d_ms = 0,
 		filament_ms = 0,
 		compositor_ms = 0,
+		compositor_acquire_ms = 0,
+		compositor_overlay_wait_ms = 0,
+		compositor_submit_present_ms = 0,
 		renderstep_hooks_ms = 0,
 		script_render_ms = 0,
 		dispatch_ms = 0,
 		render3d_update_ms = 0,
-		gc_ms = 0,
-		gc_last = os.clock(),
+		gc_ms = 0, -- retained for compatibility; automatic GC has no forced-pause timing
+		gc_mode = "automatic",
+		physics_step_ms = 0,
+		physics_sync_ms = 0,
+		physics_proxy_sync_ms = 0,
+		physics_proxy_updates = 0,
+		physics_active_bodies = 0,
+		physics_owned_bodies = 0,
+		physics_collision_steps = 0,
 	}
 
 	local function getSortedPool(pool)
@@ -658,6 +673,10 @@ function KiRend.new(config: KiRendConf)
 		activeCamera = raylibCam
 	end
 
+	function rendererObject:GetActiveCamera()
+		return activeCamera
+	end
+
 	function rendererObject:InitAudioDevice()
 		-- no-op in headless
 	end
@@ -836,7 +855,8 @@ function KiRend.new(config: KiRendConf)
 			pcall(v, rendererObject.RuntimeLibrary)
 		end
 
-		perf_stats.ui_ms = (os.clock() - uiStart) * 1000
+		perf_stats.ui_base_ms = (os.clock() - uiStart) * 1000
+		perf_stats.ui_ms = perf_stats.ui_base_ms + perf_stats.ui_overlay_ms
 	end
 
 	function rendererObject:Render2DAbove()
@@ -853,7 +873,8 @@ function KiRend.new(config: KiRendConf)
 			end
 		end
 
-		perf_stats.ui_ms = (os.clock() - uiStart) * 1000
+		perf_stats.ui_overlay_ms = (os.clock() - uiStart) * 1000
+		perf_stats.ui_ms = perf_stats.ui_base_ms + perf_stats.ui_overlay_ms
 	end
 
 	function rendererObject:Resize(newWidth, newHeight)
@@ -930,7 +951,17 @@ function KiRend.new(config: KiRendConf)
 
 	function rendererObject:step(time)
 		local frameStart = os.clock()
-		local updateStart = os.clock()
+		local frameSetupStart = frameStart
+
+		perf_stats.ui_overlay_ms = 0
+		perf_stats.compositor_acquire_ms = 0
+		perf_stats.compositor_overlay_wait_ms = 0
+		perf_stats.compositor_submit_present_ms = 0
+
+		if ENGINE_PROFILER then
+			ENGINE_PROFILER:NextFrame()
+			ENGINE_PROFILER:Begin("FrameSetup")
+		end
 
 		rendererObject.RuntimeLibrary.dt = frameTime
 		rendererObject.RuntimeLibrary.time = time
@@ -941,6 +972,11 @@ function KiRend.new(config: KiRendConf)
 		rendererObject.ShouldClose = shouldClose
 
 		if shouldClose then
+			perf_stats.frame_setup_ms = (os.clock() - frameSetupStart) * 1000
+			perf_stats.frame_ms = (os.clock() - frameStart) * 1000
+			if ENGINE_PROFILER then
+				ENGINE_PROFILER:End()
+			end
 			rendererObject:Stop()
 			return
 		end
@@ -951,24 +987,44 @@ function KiRend.new(config: KiRendConf)
 			rendererObject:Resize(newWidth, newHeight)
 		end
 
+		local beginFrameStart = os.clock()
 		argon:BeginFrame(context)
+		if window.WGI == "vulkan" then
+			perf_stats.compositor_acquire_ms = (os.clock() - beginFrameStart) * 1000
+		end
 		argon:Clear2D(window, { R = 1, G = 0, B = 0, A = 0 })
 		argon:Clear2D(skia_tools_ctx, { R = 1, G = 0, B = 0, A = 0 })
 
 		argon:SetCameraPosition(window, { X = 5, Y = 5, Z = 5 })
+		perf_stats.frame_setup_ms = (os.clock() - frameSetupStart) * 1000
+
+		if ENGINE_PROFILER then
+			ENGINE_PROFILER:End()
+			ENGINE_PROFILER:Begin("Render")
+		end
+
+		local renderStart = os.clock()
 		rendererObject:Render3D()
 		rendererObject:Render2D()
 		local filamentStart = os.clock()
 		argon:Render3D(window, frameTime)
 		perf_stats.filament_ms = (os.clock() - filamentStart) * 1000
 		if window.WGI == "vulkan" then
-			local compositorStart = os.clock()
+			local overlayWaitStart = os.clock()
 			if argon:BeginOverlay(context) then
+				perf_stats.compositor_overlay_wait_ms = (os.clock() - overlayWaitStart) * 1000
 				rendererObject.AboveCanvas = window
 				rendererObject:Render2DAbove()
+			else
+				perf_stats.compositor_overlay_wait_ms = (os.clock() - overlayWaitStart) * 1000
 			end
+			local presentStart = os.clock()
 			argon:EndFrame(context)
-			perf_stats.compositor_ms = (os.clock() - compositorStart) * 1000
+			perf_stats.compositor_submit_present_ms = (os.clock() - presentStart) * 1000
+			perf_stats.compositor_ms = perf_stats.compositor_acquire_ms
+				+ perf_stats.compositor_overlay_wait_ms
+				+ perf_stats.ui_overlay_ms
+				+ perf_stats.compositor_submit_present_ms
 		else
 			perf_stats.compositor_ms = 0
 			argon:BlitToScreen3D(window, 0, 0, context.Window.Width, context.Window.Height)
@@ -989,18 +1045,14 @@ function KiRend.new(config: KiRendConf)
 
 			argon:RenderPresent(window_renderer)
 		end
+		perf_stats.render_ms = (os.clock() - renderStart) * 1000
 
 		if ENGINE_PROFILER then
-			ENGINE_PROFILER:NextFrame()
+			ENGINE_PROFILER:End()
 			ENGINE_PROFILER:Begin("Update")
 		end
 
-		if os.clock() - perf_stats.gc_last >= 10 then
-			local gcStart = os.clock()
-			zune.luau.garbagecollect()
-			perf_stats.gc_ms = (os.clock() - gcStart) * 1000
-			perf_stats.gc_last = os.clock()
-		end
+		local updateStart = os.clock()
 
 		local renderstepHooksStart = os.clock()
 		for _, v in pairs(renderer_hooks.Renderstep) do
@@ -1022,22 +1074,29 @@ function KiRend.new(config: KiRendConf)
 
 		if ENGINE_PROFILER then
 			ENGINE_PROFILER:End()
-			ENGINE_PROFILER:Begin("Render")
+			ENGINE_PROFILER:Begin("Dispatch")
 		end
 
 		local dispatchStart = os.clock()
+		renderer_eventbus:Fire("Heartbeat", frameTime)
 		perf_stats.dispatch_ms = (os.clock() - dispatchStart) * 1000
 
+		if ENGINE_PROFILER then
+			ENGINE_PROFILER:End()
+			ENGINE_PROFILER:Begin("Afterstep")
+		end
+
+		local afterstepStart = os.clock()
+		for _, v in pairs(renderer_hooks.Afterstep) do
+			pcall(v, frameTime)
+		end
+		perf_stats.afterstep_ms = (os.clock() - afterstepStart) * 1000
 		perf_stats.frame_ms = (os.clock() - frameStart) * 1000
 		perf_stats.fps = if frameTime > 0 then 1 / frameTime else 0
 
 		if ENGINE_PROFILER then
 			ENGINE_PROFILER:SetCounter("FPS", perf_stats.fps)
 			ENGINE_PROFILER:End()
-		end
-
-		for _, v in pairs(renderer_hooks.Afterstep) do
-			pcall(v, frameTime)
 		end
 
 		task.wait(0)
@@ -1122,9 +1181,14 @@ function KiRend.new(config: KiRendConf)
 			gizmoCount = gizmoCount,
 			perf = {
 				frame_ms = perf_stats.frame_ms,
+				frame_setup_ms = perf_stats.frame_setup_ms,
 				update_ms = perf_stats.update_ms,
+				render_ms = perf_stats.render_ms,
+				afterstep_ms = perf_stats.afterstep_ms,
 				render3d_ms = perf_stats.render3d_ms,
 				ui_ms = perf_stats.ui_ms,
+				ui_base_ms = perf_stats.ui_base_ms,
+				ui_overlay_ms = perf_stats.ui_overlay_ms,
 				batches_3d = perf_stats.batches_3d,
 				mesh_calls = perf_stats.mesh_calls,
 				instanced_batches = perf_stats.instanced_batches,
@@ -1137,11 +1201,15 @@ function KiRend.new(config: KiRendConf)
 				call3d_ms = perf_stats.call3d_ms,
 				filament_ms = perf_stats.filament_ms,
 				compositor_ms = perf_stats.compositor_ms,
+				compositor_acquire_ms = perf_stats.compositor_acquire_ms,
+				compositor_overlay_wait_ms = perf_stats.compositor_overlay_wait_ms,
+				compositor_submit_present_ms = perf_stats.compositor_submit_present_ms,
 				renderstep_hooks_ms = perf_stats.renderstep_hooks_ms,
 				script_render_ms = perf_stats.script_render_ms,
 				dispatch_ms = perf_stats.dispatch_ms,
 				render3d_update_ms = perf_stats.render3d_update_ms,
 				gc_ms = perf_stats.gc_ms,
+				gc_mode = perf_stats.gc_mode,
 			},
 			windowSize = {
 				width = config.width,

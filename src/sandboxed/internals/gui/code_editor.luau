@@ -1,3 +1,4 @@
+local Selection = game:GetService("Selection")
 local StudioThemeService = game:GetService("StudioThemeService")
 local Immco = require("@Immco")
 local theme = StudioThemeService.SelectedTheme
@@ -58,6 +59,7 @@ renderer.Pool.new("2da", function()
 		BackgroundTransparency = 1,
 		theme = theme,
 		engine_window = renderer.Window,
+		renderer = renderer,
 
 		callback = function(params)
 			local rect = {
@@ -66,8 +68,8 @@ renderer.Pool.new("2da", function()
 				width = params.width,
 				height = params.height + 32,
 			}
-			Argon:DrawBackdropBlur(renderer.Window, rect, 20, 10, 15, Argon:RGBA(0, 0, 0, 0.3))
-			Immco.TextInput({
+			Argon:DrawBackdropBlur(renderer.Window, rect, 20, 10, 15, theme.CodeEditorBgColor)
+			local code = Immco.TextInput({
 				x = rect.x,
 				y = rect.y,
 				width = rect.width,
@@ -79,9 +81,9 @@ renderer.Pool.new("2da", function()
 				GutterBackgroundTransparency = 1,
 				engine_window = renderer.Window,
 				Color = { R = 0.15, G = 0.15, B = 0.15, A = 1 },
-				FocusColor = { R = 0.2, G = 0.2, B = 0.25, A = 1 },
-				TextColor = { R = 1, G = 1, B = 1, A = 1 },
-				PlaceholderColor = { R = 0.5, G = 0.5, B = 0.5, A = 1 },
+				FocusColor = theme.InputFocusColor,
+				TextColor = theme.InputTextColor,
+				PlaceholderColor = theme.InputPlaceholderColor,
 				placeholder = "hello world",
 				CodeEditor = true,
 				MultiLine = true,
@@ -106,6 +108,15 @@ renderer.Pool.new("2da", function()
 				MinimapCursorLineColor = Argon:RGBA(255, 255, 255, 0.35),
 				CommentPrefix = "--",
 			}, dt)
+			local get = Selection.Get()
+			if get and get[1] then
+				local script = get[1]
+				if script:IsA("ScriptContainer") then
+					if code then
+						script.Source = code
+					end
+				end
+			end
 		end,
 	}, dt)
 end)

@@ -1,8 +1,10 @@
 -- description: "A modifier class that creates a universal constraint between two attachments."
 local Color3 = require("@Color3")
-local adapter = require("@RaylibAdapter")
-local rl = adapter.lib
+local adapterOk, adapter = pcall(require, "@RaylibAdapter")
+adapter = adapterOk and adapter or nil
 local NetworkOwnership = require("@NetworkOwnership")
+local ConstraintVisualizer = require("@ConstraintVisualizer")
+local ConstraintRetry = require("@ConstraintRetry")
 
 local propTable = {
 	Attachment0 = nil,
@@ -28,15 +30,13 @@ return {
 
 		local function cleanup()
 			if _activeConstraint then
-				KinemiumPhysicsService.jolt.lib.JPH_PhysicsSystem_RemoveConstraint(
-					KinemiumPhysicsService.jolt.physicsSystem,
-					_activeConstraint
-				)
+				KinemiumPhysicsService.RemoveConstraint(_activeConstraint)
 				_activeConstraint = nil
 			end
 		end
 
 		local function rebuild()
+			ConstraintRetry.Cancel(instance)
 			cleanup()
 
 			if not instance.Enabled then
@@ -63,7 +63,7 @@ return {
 			local bodyID0 = KinemiumPhysicsService.GetBody(part0)
 			local bodyID1 = KinemiumPhysicsService.GetBody(part1)
 			if not bodyID0 or not bodyID1 then
-				task.defer(rebuild)
+				ConstraintRetry.Schedule(instance, rebuild)
 				return
 			end
 
@@ -97,11 +97,11 @@ return {
 
 			local function onPartChanged(prop)
 				if prop == "Anchored" then
-					task.defer(rebuild)
+					ConstraintRetry.Schedule(instance, rebuild)
 				end
 			end
-			part0.Changed:Connect(onPartChanged)
-			part1.Changed:Connect(onPartChanged)
+			ConstraintRetry.Track(instance, part0.Changed:Connect(onPartChanged))
+			ConstraintRetry.Track(instance, part1.Changed:Connect(onPartChanged))
 		end
 
 		local function drawGizmo()
@@ -129,12 +129,15 @@ return {
 				or prop == "Attachment0"
 				or prop == "Attachment1"
 			then
-				rebuild()
+				ConstraintRetry.Schedule(instance, rebuild, 0)
 			end
 		end)
+		NetworkOwnership.ObserveConstraint(instance, function()
+			ConstraintRetry.Schedule(instance, rebuild, 0)
+		end)
 
-		renderer.Pool.new("gizmo", drawGizmo)
-		task.spawn(rebuild)
+		ConstraintVisualizer.Attach(instance, renderer)
+		ConstraintRetry.Schedule(instance, rebuild, 0)
 
 		return instance
 	end,

@@ -21,9 +21,11 @@ local function envNumber(...)
 end
 
 local function getServerConfig()
-	local configuredPort = envNumber("perf_port", "PERF_PORT")
+	local flagPort = _G.GetFlagValue and (_G.GetFlagValue("perf-port") or _G.GetFlagValue("perfport"))
+	local configuredPort = envNumber("perf_port", "PERF_PORT") or tonumber(flagPort)
 	local renderPort = envNumber("PORT")
-	local configuredAddress = envValue("perf_address", "PERF_ADDRESS") or "0.0.0.0"
+	local flagAddress = _G.GetFlagValue and (_G.GetFlagValue("perf-address") or _G.GetFlagValue("perfaddress"))
+	local configuredAddress = envValue("perf_address", "PERF_ADDRESS") or flagAddress or "0.0.0.0"
 	local explicitlyEnabled = configuredPort ~= nil
 		or envValue("perf_address", "PERF_ADDRESS") ~= nil
 		or (_G.FlagExists and _G.FlagExists("perfserver"))
@@ -52,7 +54,6 @@ function kinemium_http:Init(renderer)
 	if not config then
 		return
 	end
-
 	local ok, err = pcall(function()
 		net.http.serve({
 			port = config.port,
@@ -64,6 +65,7 @@ function kinemium_http:Init(renderer)
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="refresh" content="1">
     <title>Kinemium Perf Stats</title>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap');
@@ -341,7 +343,10 @@ function kinemium_http:Init(renderer)
 	end)
 
 	if ok then
-		log(`[HTTP] Started {config.mode} server at {config.address}:{config.port}`)
+		local browserAddress = if config.address == "0.0.0.0" then "127.0.0.1" else config.address
+		log(
+			`[HTTP] Started {config.mode} server at {config.address}:{config.port}; open http://{browserAddress}:{config.port}/`
+		)
 	else
 		warn(`[HTTP] Failed to start diagnostics server at {config.address}:{config.port}: {tostring(err)}`)
 	end

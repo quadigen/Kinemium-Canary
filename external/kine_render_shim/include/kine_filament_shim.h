@@ -16,6 +16,15 @@ typedef struct KineFilamentContext KineFilamentContext;
 typedef struct KineFilamentMesh    KineFilamentMesh;
 typedef struct KineFilamentTex     KineFilamentTex;
 typedef struct KineFilamentInstanceBatch KineFilamentInstanceBatch;
+typedef struct KineFilamentShader KineFilamentShader;
+
+/* Runtime Filamat surface materials. Source is a complete .mat material definition. */
+KINE_API KineFilamentShader* Kine_Filament_Shader_Create(KineFilamentContext* ctx, const char* materialSource);
+KINE_API void Kine_Filament_Shader_Destroy(KineFilamentShader* shader);
+KINE_API bool Kine_Filament_Shader_SetUniform(
+    KineFilamentShader* shader, const char* name, const float* values, int valueCount);
+KINE_API bool Kine_Filament_SetGlobalShader(KineFilamentContext* ctx, KineFilamentShader* shader);
+KINE_API const char* Kine_Filament_Shader_GetLastError(void);
 
 #define KINE_FILAMENT_DRAW_CAST_SHADOWS    (1u << 0)
 #define KINE_FILAMENT_DRAW_RECEIVE_SHADOWS (1u << 1)
@@ -281,7 +290,7 @@ KINE_API void             Kine_Filament_DestroyTex(KineFilamentContext* ctx, Kin
 //   param2       : metallic (default) or ior (glass/water) -- unused for neon
 //   param3       : uv tile scale (default/terrain), unused (neon), or thickness (glass/water)
 //   transmission : unused (default/neon) or transmission (glass/water)
-//   mat4         : column-major float[16] world transform
+//   mat4         : row-major float[16] world transform; converted to Filament columns by the shim
 //   tex          : optional KineFilamentTex* (from Kine_Filament_CreateTex), nil for no texture
 // ---------------------------------------------------------------------------
 

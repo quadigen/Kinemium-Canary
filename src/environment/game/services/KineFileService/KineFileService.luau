@@ -5,7 +5,7 @@ local KineFileService = Instance.new("KineFileService")
 KineFileService.ExplorerHidden = true
 KineFileService._Intents = Enum.PluginIntents.Filesystem
 
-local kine = require("./src/environment/game/services/KineFileService/filetypes/kine")
+local kine = require("@kineformat")
 
 local zembed = require("@zembed")
 local fs = zune.fs
@@ -28,12 +28,11 @@ local buildNames = {
 
 local serde = zune.serde
 
-local defaultFlags = {
-	["default"] = {
-		"client",
-		"offline",
-		"no_multiplayer",
-	},
+local runtimeNames = {
+	windows = { source = "KinemiumRuntime.exe", extension = ".exe" },
+	macos = { source = "KinemiumRuntime.app", extension = ".app" },
+	linux = { source = "KinemiumRuntime", extension = "" },
+	freebsd = { source = "KinemiumRuntime", extension = "" },
 }
 
 local EMBEDDED_GAME_PATH = "./.temp/embedded-game.kine"
@@ -56,6 +55,39 @@ local function restoreAssetProperties(oldProperties)
 			object[property] = value
 		end
 	end
+end
+
+local function safeExportName(name)
+	local result = tostring(name or "KinemiumGame"):gsub("[^%w_%- ]", "_"):gsub("%s+", "_")
+	return result ~= "" and result or "KinemiumGame"
+end
+
+local function copyRuntimePackage(buildFolder, outputDirectory, executableName)
+	local runtime = runtimeNames[zune.platform.os]
+	if not runtime then
+		error(`Executable export is not supported on {tostring(zune.platform.os)}`)
+	end
+	fs.makeDir(outputDirectory, true)
+
+	local sourceExecutable = buildFolder .. "/" .. runtime.source
+	local destinationExecutable = outputDirectory .. "/" .. executableName .. runtime.extension
+	fs.copy(sourceExecutable, destinationExecutable, true)
+
+	for _, entry in ipairs(fs.entries(buildFolder)) do
+		if entry.kind == "file" and entry.name ~= runtime.source then
+			local extension = fs.path.extension(entry.name)
+			if extension == ".dll" or extension == ".so" or extension == ".dylib" or entry.name == "zune.exe" then
+				fs.copy(buildFolder .. "/" .. entry.name, outputDirectory .. "/" .. entry.name, true)
+			end
+		end
+	end
+
+	local assetsPath = buildFolder .. "/assets"
+	local assetsOk, assetsStat = pcall(fs.stat, assetsPath)
+	if assetsOk and assetsStat and assetsStat.kind == "directory" then
+		fs.copy(assetsPath, outputDirectory .. "/assets", true)
+	end
+	return destinationExecutable
 end
 
 local function loop(path)
@@ -87,6 +119,68 @@ local function loop(path)
 end
 
 KineFileService.InitRenderer = function(renderer, renderer_signal, datamodel)
+	local function exportForRole(role, gameName, outputDirectory, options)
+		if type(outputDirectory) == "table" then
+			options = outputDirectory
+			outputDirectory = options.OutputDirectory or options.outputDirectory
+		end
+		options = options or {}
+
+		local assets, old_props = assetsaver:GetGameAssets(datamodel)
+		local success, result = pcall(function()
+			fs.makeDir("./.temp", true)
+			pcall(fs.deleteFile, EMBEDDED_GAME_PATH)
+			pcall(fs.deleteFile, EMBEDDED_GAME_MODULE_PATH)
+			local serialized = KineFileService.ExportGameAsFile("./.temp", "embedded-game")
+			if not serialized then
+				error(`Failed to serialize {tostring(gameName)} for {role} export`)
+			end
+
+			local res = buildEngine(EMBEDDED_GAME_PATH)
+			if not res.ok then
+				error(`Got error code {res.code} while building Engine: {tostring(res.stderr)}`)
+			end
+
+			local platform = buildNames[zune.platform.os]
+			local buildFolder = `./build/{platform}`
+			local safeName = safeExportName(gameName)
+			local destination = outputDirectory or `{buildFolder}/exports/{safeName}-{role}`
+			local gameAssets = buildFolder .. "/assets/game"
+
+			if assets then
+				fs.makeDir(gameAssets, true)
+				for assetPath, buff in pairs(assets) do
+					fs.writeFile(gameAssets .. "/" .. fs.path.basename(assetPath), buff)
+				end
+			end
+
+			local executableName = safeName .. (role == "server" and "Server" or "Client")
+			local executablePath = copyRuntimePackage(buildFolder, destination, executableName)
+			local flags = { role }
+			if role == "server" and options.Headless ~= false then
+				table.insert(flags, "headless")
+			end
+			for _, flag in ipairs(options.Flags or {}) do
+				table.insert(flags, flag)
+			end
+			fs.makeDir(destination .. "/exported", true)
+			fs.writeFile(destination .. "/exported/flags.toml", serde.toml.encode({ default = flags }))
+			return {
+				Role = role,
+				Directory = destination,
+				Executable = executablePath,
+			}
+		end)
+
+		restoreAssetProperties(old_props)
+		pcall(fs.deleteFile, EMBEDDED_GAME_PATH)
+		pcall(fs.deleteFile, EMBEDDED_GAME_MODULE_PATH)
+		if not success then
+			error(result, 2)
+		end
+		return result
+	end
+
 	KineFileService:SetProperties({
 		BuildRuntime = function()
 			if zembed.IsEmbedded() then
@@ -192,53 +286,25 @@ KineFileService.InitRenderer = function(renderer, renderer_signal, datamodel)
 			return false
 		end,
 
-		ExportGameAsExecutable = function(gameName)
-			local assets, old_props = assetsaver:GetGameAssets(datamodel)
-			local success, result = pcall(function()
-				fs.makeDir("./.temp", true)
-				pcall(fs.deleteFile, EMBEDDED_GAME_PATH)
-				pcall(fs.deleteFile, EMBEDDED_GAME_MODULE_PATH)
-				local serialized = KineFileService.ExportGameAsFile("./.temp", "embedded-game")
-				if not serialized then
-					error(`Failed to serialize {tostring(gameName)} for executable export`)
-				end
-
-				local res = buildEngine(EMBEDDED_GAME_PATH)
-				pcall(fs.deleteFile, EMBEDDED_GAME_PATH)
-				if not res.ok then
-					error(`Got error code {res.code} while building Engine: {tostring(res.stderr)}`)
-				end
-
-				local platform = buildNames[zune.platform.os]
-				local buildFolder = `./build/{platform}`
-				local exportedFolder = buildFolder .. "/exported"
-				local game_folder_assets = buildFolder .. "/assets/game"
-
-				fs.makeDir(exportedFolder, true)
-
-				-- Runtime flags and game assets remain beside the executable. The datamodel
-				-- itself is bundled into the executable by build.luau.
-				fs.writeFile(exportedFolder .. "/flags.toml", serde.toml.encode(defaultFlags))
-
-				if assets then
-					fs.makeDir(game_folder_assets, true)
-
-					for path, buff in pairs(assets) do
-						local basename = zune.fs.path.basename(path)
-						fs.writeFile(game_folder_assets .. "/" .. basename, buff)
-					end
-				end
-			end)
-
-			restoreAssetProperties(old_props)
-			pcall(fs.deleteFile, EMBEDDED_GAME_PATH)
-			pcall(fs.deleteFile, EMBEDDED_GAME_MODULE_PATH)
-
-			if not success then
-				error(result)
+		ExportAsClient = function(gameName, outputDirectory, options, colonOptions)
+			if gameName == KineFileService then
+				gameName, outputDirectory, options = outputDirectory, options, colonOptions
 			end
+			return exportForRole("client", gameName, outputDirectory, options)
+		end,
 
-			return true
+		ExportAsServer = function(gameName, outputDirectory, options, colonOptions)
+			if gameName == KineFileService then
+				gameName, outputDirectory, options = outputDirectory, options, colonOptions
+			end
+			return exportForRole("server", gameName, outputDirectory, options)
+		end,
+
+		ExportGameAsExecutable = function(gameName, outputDirectory, options, colonOptions)
+			if gameName == KineFileService then
+				gameName, outputDirectory, options = outputDirectory, options, colonOptions
+			end
+			return exportForRole("client", gameName, outputDirectory, options)
 		end,
 	})
 end

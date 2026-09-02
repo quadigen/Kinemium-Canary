@@ -4,9 +4,6 @@ local zjoin = zpath.join
 local EXECUTABLE_NAME = "KinemiumCLI"
 local COMPRESSION = "zstd"
 
--- This script is invoked from within src/cli itself (e.g. `zune run build`
--- while your cwd is src/cli), so paths are relative to this folder, not the
--- project root.
 local root = "."
 local entry = zjoin(root, "main.luau")
 

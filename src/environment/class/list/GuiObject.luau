@@ -5,9 +5,15 @@ local UDim2 = require("@UDim2")
 local signal = require("@Kinemium.signal")
 local Vector2 = require("@Vector2")
 local argon = require("@Argon")
+local UILayout = require("@UILayout")
 
 local ZERO_V = vector.create(0, 0, 0)
 local MAX_AUTOMATIC_SIZE_DEPTH = 8
+
+local function applySizeConstraints(object, resolvedSize)
+	local size = UILayout.ConstrainSize(object, resolvedSize)
+	return vector.create(size.X, size.Y, 0)
+end
 
 local function resolveUDim2(val, parentDim)
 	if val then
@@ -92,11 +98,11 @@ local function precomputeLayoutChildren(object, window, dt, renderer)
 end
 
 local function calculateResolvedSize(object, parentSize, window, dt, renderer, depth)
-	local size = resolveUDim2(object.Size, parentSize)
+	local size = object._LayoutRelativeSize or resolveUDim2(object.Size, parentSize)
 	local autoX, autoY = resolveAutomaticSizeAxes(object.AutomaticSize)
 
 	if (not autoX and not autoY) or (depth or 0) >= MAX_AUTOMATIC_SIZE_DEPTH then
-		return size
+		return applySizeConstraints(object, size)
 	end
 
 	precomputeLayoutChildren(object, window, dt, renderer)
@@ -138,7 +144,10 @@ local function calculateResolvedSize(object, parentSize, window, dt, renderer, d
 		maxY = top + bottom
 	end
 
-	return vector.create(autoX and math.max(0, maxX) or size.X, autoY and math.max(0, maxY) or size.Y, 0)
+	return applySizeConstraints(
+		object,
+		vector.create(autoX and math.max(0, maxX) or size.X, autoY and math.max(0, maxY) or size.Y, 0)
+	)
 end
 
 local function GetAbsoluteSize(object, window, dt, renderer, depth)

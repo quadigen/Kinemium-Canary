@@ -4,7 +4,7 @@ local Vector2 = require("@Vector2")
 local propTable = {
 	-- local transform
 	Position = Vector2.new(0, 0),
-	Rotation = 0, -- radians
+	Rotation = 0, -- degrees, consistent with Body2D and Camera2D
 
 	BaseClass = "Attachment2D",
 
@@ -19,7 +19,7 @@ local propTable = {
 		end
 
 		local parentPos = parent.WorldPosition or parent.Position
-		local parentRot = parent.Rotation or 0
+		local parentRot = math.rad(parent.Rotation or 0)
 
 		local c = math.cos(parentRot)
 		local s = math.sin(parentRot)

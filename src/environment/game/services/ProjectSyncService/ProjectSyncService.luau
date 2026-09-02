@@ -100,7 +100,7 @@ local function buildDefaultProjectConfig(projectPath)
 		pointers = {
 			assets = "game.ReplicatedStorage",
 			server = "game.ServerScriptService",
-			client = "game.StarterPlayerScripts",
+			client = "game.StarterPlayer.StarterPlayerScripts",
 			gui = "game.StarterGui",
 			objects = "game.Workspace",
 		},
@@ -185,7 +185,7 @@ local function shouldIgnoreName(name, ignoreLookup)
 	return false
 end
 
-local function getScriptDescriptor(name)
+local function getScriptDescriptor(name, pointerName)
 	local ext = getExtension(name)
 	local scriptType = "ModuleScript"
 	local language = Enum.Language.Luau
@@ -201,6 +201,13 @@ local function getScriptDescriptor(name)
 		runContext = Enum.RunContext.Client
 	elseif moduleExts[ext] then
 		language = moduleExts[ext]
+		if pointerName == "server" then
+			scriptType = "Script"
+			runContext = Enum.RunContext.Server
+		elseif pointerName == "client" then
+			scriptType = "LocalScript"
+			runContext = Enum.RunContext.Client
+		end
 	else
 		return nil
 	end
@@ -387,7 +394,7 @@ local function syncDirectory(state, pointerName, dirPath, parentObject, isRoot, 
 	elseif initEntry then
 		local initPath = fs.path.join(dirPath, initEntry.name)
 		local source = fs.readFile(initPath)
-		local descriptor = getScriptDescriptor(initEntry.name)
+		local descriptor = getScriptDescriptor(initEntry.name, pointerName)
 		if not descriptor then
 			error(`[ProjectSync] Unsupported init script '{initEntry.name}' in '{dirPath}'`)
 		end
@@ -421,7 +428,7 @@ local function syncDirectory(state, pointerName, dirPath, parentObject, isRoot, 
 		if entry.kind == "directory" then
 			syncDirectory(state, pointerName, entryPath, container, false, ignoreLookup, entryRelativePath)
 		elseif entry.kind == "file" then
-			local descriptor = getScriptDescriptor(entry.name)
+			local descriptor = getScriptDescriptor(entry.name, pointerName)
 			if not descriptor then
 				continue
 			end
@@ -658,7 +665,7 @@ local function getBackupInstances(datamodel)
 end
 
 local function saveProjectBackup(state, reason)
-	if not state or state.active ~= true then
+	if not state or state.active ~= true or state.options.readOnly == true then
 		return nil
 	end
 
@@ -777,6 +784,9 @@ local function restoreBackupInstance(datamodel, instance)
 end
 
 local function loadLatestProjectBackup(state)
+	if state.options.readOnly == true then
+		return nil
+	end
 	local backupPath = getLatestBackupPath(state.projectPath)
 	if not backupPath then
 		return nil
@@ -813,6 +823,9 @@ end
 
 local function startBackupLoop(state)
 	stopBackupLoop(state)
+	if state.options.readOnly == true then
+		return
+	end
 
 	local interval = getBackupInterval(state.config)
 	if interval <= 0 then
@@ -1043,6 +1056,10 @@ registerManagedInstance = function(state, pointerName, instance, sourcePath, rel
 		instance:SetAttribute(ATTR_POINTER, pointerName)
 		instance:SetAttribute(ATTR_SOURCE, sourcePath)
 		instance:SetAttribute(ATTR_RELATIVE, relativePath or "")
+	end
+
+	if state.options.readOnly == true then
+		return
 	end
 
 	if

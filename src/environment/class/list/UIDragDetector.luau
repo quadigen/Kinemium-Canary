@@ -2,15 +2,23 @@
 local Vector2 = require("@Vector2")
 local Vector3 = require("@Vector3")
 local UDim2 = require("@UDim2")
-local adapter = require("@RaylibAdapter")
+local Argon = require("@Argon")
+local Enum = require("@EnumMap")
 local MouseCursor = require("@Kinemium.MouseCursor")
 
-local aereon = require("@Aereon")
-local arect = aereon.rect()
+local function makeRect(x, y, width, height)
+	return { x = x, y = y, width = width, height = height }
+end
+
+local function mouseInRect(rect)
+	local mouse = Argon:GetMousePosition()
+	return mouse.X >= rect.x and mouse.X <= rect.x + rect.width
+		and mouse.Y >= rect.y and mouse.Y <= rect.y + rect.height
+end
 
 local ZERO_V2 = Vector2.new(0, 0)
 
-local function getParentMetrics(parent)
+local function getParentMetrics(parent, window)
 	local parentAbsPos = ZERO_V2
 	local parentSize = ZERO_V2
 
@@ -27,10 +35,7 @@ local function getParentMetrics(parent)
 	if parent.AbsoluteSize then
 		parentSize = parent.AbsoluteSize
 	elseif parent.Size and parent.Size.ToPixels then
-		local dpiScale = adapter.lib.GetWindowScaleDPI()
-		parentSize = parent.Size:ToPixels(
-			Vector2.new(adapter.lib.GetRenderWidth() / dpiScale.x, adapter.lib.GetRenderHeight() / dpiScale.y)
-		)
+		parentSize = parent.Size:ToPixels(Vector2.new(Argon:GetRenderWidth(window), Argon:GetRenderHeight(window)))
 	end
 
 	return parentAbsPos, parentSize
@@ -58,19 +63,18 @@ return {
 					end
 
 					if instance.isDragging == true then
-						local mousePos = adapter.lib.GetMousePosition()
-						local newAbsX = mousePos.x - instance.dragOffset.X
-						local newAbsY = mousePos.y - instance.dragOffset.Y
+						local mousePos = Argon:GetMousePosition()
+						local newAbsX = mousePos.X - instance.dragOffset.X
+						local newAbsY = mousePos.Y - instance.dragOffset.Y
 
 						if instance.RespectScreenBounds then
-							local dpiScale = adapter.lib.GetWindowScaleDPI()
-							local screenW = adapter.lib.GetScreenWidth() / dpiScale.x
-							local screenH = adapter.lib.GetScreenHeight() / dpiScale.y
+							local screenW = Argon:GetRenderWidth(renderer.Window)
+							local screenH = Argon:GetRenderHeight(renderer.Window)
 							newAbsX = math.clamp(newAbsX, 0, screenW - absoluteSize.X)
 							newAbsY = math.clamp(newAbsY, 0, screenH - absoluteSize.Y)
 						end
 
-						local parentAbsPos, parentSize = getParentMetrics(adornee.Parent)
+						local parentAbsPos, parentSize = getParentMetrics(adornee.Parent, renderer.Window)
 						local anchor = adornee.AnchorPoint or ZERO_V2
 						local relativeX = newAbsX - parentAbsPos.X + absoluteSize.X * anchor.X
 						local relativeY = newAbsY - parentAbsPos.Y + absoluteSize.Y * anchor.Y
@@ -84,21 +88,21 @@ return {
 							relativeY - scaleYOffset
 						)
 
-						MouseCursor.request(adapter.const.MouseCursor.MOUSE_CURSOR_RESIZE_ALL)
+						MouseCursor.request(Enum.KinemiumMouseCursor.MOUSE_CURSOR_RESIZE_ALL.Value)
 					end
 
-					local new = arect.new(absolutePosition.X, absolutePosition.Y, absoluteSize.X, absoluteSize.Y)
-					if arect.MouseIsInRect(new) then
-						if adapter.lib.IsMouseButtonDown(0) == 1 then
+					local new = makeRect(absolutePosition.X, absolutePosition.Y, absoluteSize.X, absoluteSize.Y)
+					if mouseInRect(new) then
+						if Argon:IsMouseButtonDown(Argon.MouseButton.Left) then
 							if not instance.isDragging then
-								local mousePos = adapter.lib.GetMousePosition()
+								local mousePos = Argon:GetMousePosition()
 								instance.dragOffset =
-									Vector3.new(mousePos.x - absolutePosition.X, mousePos.y - absolutePosition.Y, 0)
+									Vector3.new(mousePos.X - absolutePosition.X, mousePos.Y - absolutePosition.Y, 0)
 							end
 							instance.isDragging = true
-						elseif adapter.lib.IsMouseButtonReleased(0) == 1 then
+						elseif Argon:IsMouseButtonReleased(Argon.MouseButton.Left) then
 							instance.isDragging = false
-							MouseCursor.request(adapter.const.MouseCursor.MOUSE_CURSOR_DEFAULT)
+							MouseCursor.request(Enum.KinemiumMouseCursor.MOUSE_CURSOR_DEFAULT.Value)
 						end
 					end
 				end

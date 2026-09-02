@@ -1,6 +1,6 @@
 -- description: "Creates a shader-based frame for custom rendering."
 local GuiObject = require("@GuiObject")
-local adapter = require("@RaylibAdapter")
+local argon = require("@Argon")
 
 local propTable = {
 	Name = "ShaderFrame",
@@ -21,54 +21,55 @@ local function clamp(value, minValue, maxValue)
 	return value
 end
 
-propTable.render = function(lib, object, dt, structs, renderer)
+propTable.render = function(window, object, dt, renderer)
 	if not object.Visible then
 		return
 	end
 
-	local pos, size = GuiObject.render(lib, object, dt, structs, renderer)
+	local pos, size = GuiObject.render(window, object, dt, renderer)
 	object.AbsolutePosition = pos
 	object.AbsoluteSize = size
 
-	local scissorX = math.floor(pos.X)
-	local scissorY = math.floor(pos.Y)
-	local scissorW = math.max(1, math.floor(size.X))
-	local scissorH = math.max(1, math.floor(size.Y))
-
-	if object.Shader then
+	local shader = object.Shader
+	if shader and shader._type == "2d" then
 		object._frameCount = (object._frameCount or 0) + 1
-
-		adapter.lib.BeginShaderMode(object.Shader._shader)
-
-		local time = adapter.lib.GetTime()
+		local time = os.clock()
 		local safeW = math.max(size.X, 1)
 		local safeH = math.max(size.Y, 1)
-
-		local localX = clamp(lib.GetMouseX() - pos.X, 0, safeW)
-		local localY = clamp(lib.GetMouseY() - pos.Y, 0, safeH)
+		local mouse = argon:GetMousePosition()
+		local localX = clamp((mouse and mouse.X or 0) - pos.X, 0, safeW)
+		local localY = clamp((mouse and mouse.Y or 0) - pos.Y, 0, safeH)
 		local mouseUVX = localX / safeW
 		local mouseUVY = localY / safeH
 
-		object.Shader:SetUniform("u_time", time, true)
-		object.Shader:SetUniform("u_deltaTime", dt, true)
-		object.Shader:SetUniform("u_frame", object._frameCount, false)
-		object.Shader:SetUniform("u_resolution", { safeW, safeH }, true)
-		object.Shader:SetUniform("u_mouse", { localX, localY }, true)
-		object.Shader:SetUniform("u_mouseUV", { mouseUVX, mouseUVY }, true)
-		object.Shader:SetUniform("u_framePos", { pos.X, pos.Y }, true)
-		object.Shader:SetUniform("iTime", time, true)
-		object.Shader:SetUniform("iTimeDelta", dt, true)
-		object.Shader:SetUniform("iFrame", object._frameCount, false)
-		object.Shader:SetUniform("iResolution", { safeW, safeH, 1 }, true)
-		object.Shader:SetUniform("iMouse", { localX, localY, localX, localY }, true)
-	end
-	adapter.lib.DrawRectangle(pos.X, pos.Y, size.X, size.Y, adapter.const.WHITE)
+		shader:SetUniform("u_time", time)
+		shader:SetUniform("u_deltaTime", dt)
+		shader:SetUniform("u_frame", object._frameCount)
+		shader:SetUniform("u_resolution", { safeW, safeH })
+		shader:SetUniform("u_mouse", { localX, localY })
+		shader:SetUniform("u_mouseUV", { mouseUVX, mouseUVY })
+		shader:SetUniform("u_framePos", { pos.X, pos.Y })
+		shader:SetUniform("iTime", time)
+		shader:SetUniform("iTimeDelta", dt)
+		shader:SetUniform("iFrame", object._frameCount)
+		shader:SetUniform("iResolution", { safeW, safeH, 1 })
+		shader:SetUniform("iMouse", { localX, localY, localX, localY })
 
-	if object.Shader then
-		adapter.lib.EndShaderMode()
+		local compiled, compileError = shader:Compile(window)
+		if compiled then
+			argon:DrawRuntimeShaderRectangle(window, shader._shader, {
+				x = pos.X,
+				y = pos.Y,
+				width = size.X,
+				height = size.Y,
+			})
+		elseif object._shaderCompileError ~= compileError then
+			object._shaderCompileError = compileError
+			warn(`ShaderFrame failed to compile SkSL: {compileError}`)
+		end
 	end
 
-	GuiObject.renderChildren(lib, object, dt, structs, renderer)
+	GuiObject.renderChildren(window, object, dt, renderer)
 
 	return pos, size
 end

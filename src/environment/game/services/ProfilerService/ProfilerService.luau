@@ -8,6 +8,7 @@ ProfilerService._Intents = Enum.PluginIntents.Debugging
 ProfilerService.InitRenderer = function(renderer, renderer_signal)
 	ProfilerService:SetProperties({
 		ENGINE_PROFILER = ENGINE_PROFILER,
+		PERF_STATS = renderer and renderer.PerfStats,
 	})
 end
 

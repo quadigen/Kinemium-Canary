@@ -26,8 +26,9 @@ return {
 		-- args: "self: table, v: Vector3"
 		instance.ApplyImpulse = function(self, v)
 			if KinemiumPhysicsService then
-				KinemiumPhysicsService.ApplyImpulse(instance, v)
+				return KinemiumPhysicsService.ApplyImpulse(instance, v)
 			end
+			return false
 		end
 
 		renderer.EventBus:Fire("UpdatePart", instance)

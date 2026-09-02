@@ -16,6 +16,7 @@ local propTable = {
 	Anchored = true,
 	NeonEnergy = 5.0,
 	CanCollide = true,
+	CanQuery = true,
 	CollisionGroup = "Default",
 	Velocity = Vector3.new(0, 0, 0),
 	CustomPhysicalProperties = PhysicalProperties.new(1, 1, 0, 1, 0),
@@ -90,6 +91,15 @@ local function syncFromCFrame(instance, cf)
 	props.Position = cf.Position
 	props.Orientation = Vector3.new(rx, ry, rz)
 	props.Rotation = props.Orientation
+	rawset(instance, "__matrixDirty", true)
+	local batch = rawget(instance, "__workspaceBatch")
+	if batch then
+		batch.instancesDirty = true
+	end
+	local chunk = rawget(instance, "__workspaceChunk")
+	if chunk then
+		chunk.instanceDataDirty = true
+	end
 end
 
 local function syncFromPosition(instance, position)
@@ -147,8 +157,9 @@ return {
 		-- args: "self: table, v: Vector3"
 		function instance:ApplyImpulse(v)
 			if KinemiumPhysicsService then
-				KinemiumPhysicsService.ApplyImpulse(instance, v)
+				return KinemiumPhysicsService.ApplyImpulse(instance, v)
 			end
+			return false
 		end
 
 		-- description: "Applies physics impulse at a specified position."
@@ -156,8 +167,9 @@ return {
 		function instance:ApplyImpulseAtPosition(v)
 			-- add impulse at position feature
 			if KinemiumPhysicsService then
-				KinemiumPhysicsService.ApplyImpulse(instance, v)
+				return KinemiumPhysicsService.ApplyImpulse(instance, v)
 			end
+			return false
 		end
 
 		-- description: "Returns whether the parts can collide with each other."

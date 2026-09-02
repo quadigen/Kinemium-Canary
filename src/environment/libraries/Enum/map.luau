@@ -119,11 +119,11 @@ enumTable.UIParticleEmitterShape = {
 	Ring = 3,
 }
 
-enumTable.KinemiumShaderPreset = {
-	Low = 1,
-	Medium = 2,
-	High = 3,
-	Ultra = 4,
+enumTable.KinemiumGraphicsPreset = {
+	Off = "off",
+	Low = "low",
+	Medium = "medium",
+	High = "high",
 }
 
 enumTable.KeyCode = {

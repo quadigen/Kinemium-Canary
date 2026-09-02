@@ -1050,7 +1050,7 @@ local funcs = {
 		args = { ffi.types.pointer, ffi.types.pointer, ffi.types.i32, ffi.types.i32, ffi.types.i32, ffi.types.i32 },
 	},
 	SDL_CreateColorCursor = { returns = ffi.types.pointer, args = { ffi.types.pointer, ffi.types.i32, ffi.types.i32 } },
-	SDL_CreateSystemCursor = { returns = ffi.types.pointer, args = { ffi.types.pointer } },
+	SDL_CreateSystemCursor = { returns = ffi.types.pointer, args = { ffi.types.i32 } },
 	SDL_SetCursor = { returns = ffi.types.pointer, args = { ffi.types.pointer } },
 	SDL_GetCursor = { returns = ffi.types.pointer, args = {} },
 	SDL_GetDefaultCursor = { returns = ffi.types.pointer, args = {} },

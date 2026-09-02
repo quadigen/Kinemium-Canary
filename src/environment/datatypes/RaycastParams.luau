@@ -1,9 +1,4 @@
-local Enum = {
-	RaycastFilterType = {
-		Whitelist = 0,
-		Blacklist = 1,
-	},
-}
+local Enum = require("@EnumMap")
 
 local RaycastParams = {}
 RaycastParams.__index = RaycastParams
@@ -11,7 +6,7 @@ RaycastParams.__index = RaycastParams
 function RaycastParams.new()
 	return setmetatable({
 		FilterDescendantsInstances = {},
-		FilterType = Enum.RaycastFilterType.Whitelist,
+		FilterType = Enum.RaycastFilterType.Exclude,
 		IgnoreWater = false,
 		CollisionGroup = "Default",
 		RespectCanCollide = false,

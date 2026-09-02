@@ -100,13 +100,10 @@ local function unpackQuat(packed)
 end
 
 local function serializeVector3(value)
-	local b = buffer.create(6)
-	local x = math.clamp(math.round((value.X or 0) * 8), -32768, 32767)
-	local y = math.clamp(math.round((value.Y or 0) * 8), -32768, 32767)
-	local z = math.clamp(math.round((value.Z or 0) * 8), -32768, 32767)
-	buffer.writei16(b, 0, x)
-	buffer.writei16(b, 2, y)
-	buffer.writei16(b, 4, z)
+	local b = buffer.create(12)
+	buffer.writef32(b, 0, value.X or 0)
+	buffer.writef32(b, 4, value.Y or 0)
+	buffer.writef32(b, 8, value.Z or 0)
 	return buffer.tostring(b)
 end
 
@@ -115,9 +112,26 @@ local function deserializeVector3(str)
 	return {
 		type = "Vector3",
 		__type = "Vector3",
-		X = buffer.readi16(b, 0) / 8,
-		Y = buffer.readi16(b, 2) / 8,
-		Z = buffer.readi16(b, 4) / 8,
+		X = buffer.readf32(b, 0),
+		Y = buffer.readf32(b, 4),
+		Z = buffer.readf32(b, 8),
+	}
+end
+
+local function serializeVector2(value)
+	local b = buffer.create(8)
+	buffer.writef32(b, 0, value.X or 0)
+	buffer.writef32(b, 4, value.Y or 0)
+	return buffer.tostring(b)
+end
+
+local function deserializeVector2(str)
+	local b = buffer.fromstring(str)
+	return {
+		type = "Vector2",
+		__type = "Vector2",
+		X = buffer.readf32(b, 0),
+		Y = buffer.readf32(b, 4),
 	}
 end
 
@@ -164,23 +178,20 @@ local function serializeCFrame(value)
 
 	local packed = packQuat(qx, qy, qz, qw)
 
-	local b = buffer.create(10)
-	local x = math.clamp(math.round((pos.X or 0) * 8), -32768, 32767)
-	local y = math.clamp(math.round((pos.Y or 0) * 8), -32768, 32767)
-	local z = math.clamp(math.round((pos.Z or 0) * 8), -32768, 32767)
-	buffer.writei16(b, 0, x)
-	buffer.writei16(b, 2, y)
-	buffer.writei16(b, 4, z)
-	buffer.writeu32(b, 6, packed)
+	local b = buffer.create(16)
+	buffer.writef32(b, 0, pos.X or 0)
+	buffer.writef32(b, 4, pos.Y or 0)
+	buffer.writef32(b, 8, pos.Z or 0)
+	buffer.writeu32(b, 12, packed)
 	return buffer.tostring(b)
 end
 
 local function deserializeCFrame(str)
 	local b = buffer.fromstring(str)
-	local px = buffer.readi16(b, 0) / 8
-	local py = buffer.readi16(b, 2) / 8
-	local pz = buffer.readi16(b, 4) / 8
-	local packed = buffer.readu32(b, 6)
+	local px = buffer.readf32(b, 0)
+	local py = buffer.readf32(b, 4)
+	local pz = buffer.readf32(b, 8)
+	local packed = buffer.readu32(b, 12)
 
 	local x, y, z, w = unpackQuat(packed)
 
@@ -240,6 +251,7 @@ function SerializerAdapters.EnsureRegistered()
 	registered = true
 
 	Serializer.RegisterType("Vector3", serializeVector3, deserializeVector3)
+	Serializer.RegisterType("Vector2", serializeVector2, deserializeVector2)
 	Serializer.RegisterType("CFrame", serializeCFrame, deserializeCFrame)
 	Serializer.RegisterType("Color3", serializeColor3, deserializeColor3)
 end

@@ -1259,28 +1259,18 @@ function Instance:Destroy()
 		children[#children + 1] = child
 	end
 
+	local props = rawget(self, "_props")
+	if props and props.Parent then
+		self.Parent = nil
+	end
+
 	rawset(self, "_children", {})
 
 	for _, child in ipairs(children) do
-		rawset(child, "_skipParentRemoval", true)
 		child:Destroy()
 	end
 
-	local props = rawget(self, "_props")
-	if props and props.Parent and not rawget(self, "_skipParentRemoval") then
-		local parentChildren = rawget(props.Parent, "_children")
-		if parentChildren then
-			for i = #parentChildren, 1, -1 do
-				if parentChildren[i] == self then
-					table.remove(parentChildren, i)
-					break
-				end
-			end
-		end
-	end
-
 	rawset(self, "_props", nil)
-	rawset(self, "_skipParentRemoval", nil)
 	rawset(self, "Destroyed", true)
 
 	-- Disconnect all signals
