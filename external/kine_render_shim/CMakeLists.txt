@@ -263,7 +263,9 @@ if(KINE_WITH_FILAMENT)
 
     # Filament's prebuilt backend archive contains both Vulkan and OpenGL
     # factories. Static linking therefore needs both loader archives even
-    # when this shim selects Vulkan exclusively at runtime.
+    # when this shim selects Vulkan exclusively at runtime. Keep these as
+    # PUBLIC link dependencies so the final whole-archive bundle inherits the
+    # transitive Filament static libraries instead of leaving them unresolved.
     set(KINE_FILAMENT_CORE_LIBS
         filamat
         filament
@@ -279,13 +281,13 @@ if(KINE_WITH_FILAMENT)
         uberarchive
         shaders
     )
+    target_link_libraries(kine_filament_shim PUBLIC ${KINE_FILAMENT_CORE_LIBS})
 
     if(WIN32)
         target_link_libraries(kine_filament_shim
             PRIVATE
                 ${KINE_SDL3_TARGET}
                 ${KINE_ASSIMP_TARGET}
-                ${KINE_FILAMENT_CORE_LIBS}
                 gdi32 user32 opengl32
         )
     elseif(APPLE)
@@ -293,7 +295,6 @@ if(KINE_WITH_FILAMENT)
             PRIVATE
                 ${KINE_SDL3_TARGET}
                 ${KINE_ASSIMP_TARGET}
-                ${KINE_FILAMENT_CORE_LIBS}
                 "-framework Cocoa"
                 "-framework OpenGL"
                 "-framework CoreVideo"
@@ -303,17 +304,10 @@ if(KINE_WITH_FILAMENT)
                 "-framework MetalKit"
         )
     else()
-        # GNU ld cares about static-lib ordering because these archives
-        # reference each other circularly; wrap in --start-group/--end-group
-        # so it re-scans until everything resolves, instead of hand-tuning
-        # link order (which breaks again on the next Filament version bump).
         target_link_libraries(kine_filament_shim
             PRIVATE
                 ${KINE_SDL3_TARGET}
                 ${KINE_ASSIMP_TARGET}
-                -Wl,--start-group
-                ${KINE_FILAMENT_CORE_LIBS}
-                -Wl,--end-group
                 GL X11 dl pthread
         )
     endif()
