@@ -7,6 +7,7 @@ local PropertyCategories = require("@propertyCategories")
 local inspectorStorage = {}
 local ColorSequence = require("@ColorSequence")
 local ColorSequenceKeypoint = require("@ColorSequenceKeypoint")
+local inspectorContentHeight = 0
 
 if IsServer then
 	return
@@ -51,6 +52,10 @@ local searchBoxHeight = 20
 local iconPath = "./src/assets/images/icons/"
 local arrowRight = Argon:CreateImageFromPath(iconPath .. "ArrowRight.svg")
 local expandedIcon = Argon:CreateImageFromPath(iconPath .. "ArrowDown.svg")
+
+local adapterHeights = {
+	CFrame = 45 * uiScale,
+}
 
 local categoryExpanded = setmetatable({}, {
 	__index = function()
@@ -320,6 +325,7 @@ local adapters = {
 				y = prop_y,
 				width = boxWidth,
 				height = 16,
+
 				id = prop.name .. "_" .. id,
 				RetainedStorage = inspectorStorage,
 				renderer = renderer,
@@ -346,11 +352,13 @@ local adapters = {
 
 				OnSubmit = function(text)
 					local number = tonumber(text)
+
 					if not number then
 						return
 					end
 
 					local current = firstObj[prop.name]
+
 					firstObj[prop.name] =
 						Vector2.new(component == "X" and number or current.X, component == "Y" and number or current.Y)
 				end,
@@ -359,8 +367,17 @@ local adapters = {
 			}, dt)
 		end
 
-		input("X", prop_x, "X", { R = 0.35, G = 0.08, B = 0.08 })
-		input("Y", prop_x + boxWidth + 4, "Y", { R = 0.08, G = 0.35, B = 0.08 })
+		input("X", prop_x, "X", {
+			R = 0.35,
+			G = 0.08,
+			B = 0.08,
+		})
+
+		input("Y", prop_x + boxWidth + 4, "Y", {
+			R = 0.08,
+			G = 0.35,
+			B = 0.08,
+		})
 	end,
 
 	Vector3 = function(prop, firstObj, prop_x, prop_y, dt, width)
@@ -590,24 +607,159 @@ local adapters = {
 		local position = value.Position
 		local rx, ry, rz = value:ToEulerAnglesXYZ()
 
-		Immco.Text({
+		local gap = 4
+		local boxWidth = (width - gap * 2) / 3
+
+		local function input(id, x, y, currentValue, onSubmit)
+			Immco.TextInput({
+				x = x,
+				y = y,
+				width = boxWidth,
+				height = 16,
+
+				id = prop.name .. "_" .. id,
+				RetainedStorage = inspectorStorage,
+				renderer = renderer,
+				theme = theme,
+
+				Color = { R = 0.15, G = 0.15, B = 0.15, A = 1 },
+				FocusColor = theme.InputFocusColor,
+				TextColor = theme.InputTextColor,
+				PlaceholderColor = theme.InputPlaceholderColor,
+
+				placeholder = string.format("%.2f", currentValue),
+
+				OnSubmit = function(text)
+					local number = tonumber(text)
+
+					if number then
+						onSubmit(number)
+					end
+				end,
+
+				engine_window = renderer.Window,
+			}, dt)
+		end
+
+		local function rebuildPosition(component, number)
+			local current = firstObj[prop.name]
+			local p = current.Position
+			local crx, cry, crz = current:ToEulerAnglesXYZ()
+
+			local newPosition = Vector3.new(
+				component == "X" and number or p.X,
+				component == "Y" and number or p.Y,
+				component == "Z" and number or p.Z
+			)
+
+			firstObj[prop.name] = CFrame.new(newPosition) * CFrame.Angles(crx, cry, crz)
+		end
+
+		local function rebuildRotation(component, degrees)
+			local current = firstObj[prop.name]
+			local p = current.Position
+			local crx, cry, crz = current:ToEulerAnglesXYZ()
+
+			local radians = math.rad(degrees)
+
+			if component == "X" then
+				crx = radians
+			elseif component == "Y" then
+				cry = radians
+			else
+				crz = radians
+			end
+
+			firstObj[prop.name] = CFrame.new(p) * CFrame.Angles(crx, cry, crz)
+		end
+
+		-- Position
+		input("PX", prop_x, prop_y, position.X, function(v)
+			rebuildPosition("X", v)
+		end)
+
+		input("PY", prop_x + boxWidth + gap, prop_y, position.Y, function(v)
+			rebuildPosition("Y", v)
+		end)
+
+		input("PZ", prop_x + (boxWidth + gap) * 2, prop_y, position.Z, function(v)
+			rebuildPosition("Z", v)
+		end)
+
+		-- Rotation, shown as degrees
+		input("RX", prop_x, prop_y + 20, math.deg(rx), function(v)
+			rebuildRotation("X", v)
+		end)
+
+		input("RY", prop_x + boxWidth + gap, prop_y + 20, math.deg(ry), function(v)
+			rebuildRotation("Y", v)
+		end)
+
+		input("RZ", prop_x + (boxWidth + gap) * 2, prop_y + 20, math.deg(rz), function(v)
+			rebuildRotation("Z", v)
+		end)
+	end,
+
+	Instance = function(prop, firstObj, prop_x, prop_y, dt, width)
+		local value = prop.value
+		local clearWidth = 20
+		local referenceWidth = width - clearWidth - 4
+
+		Argon:DrawRectangle(renderer.Window, {
 			x = prop_x,
-			y = prop_y + 2,
-			TextSize = textSize,
-			theme = theme,
+			y = prop_y,
+			width = referenceWidth,
+			height = 16,
+			Color = theme.InputColor,
+		})
+
+		Immco.Text({
+			x = prop_x + 6,
+			y = prop_y + 13,
+			TextSize = 13,
 			Font = Argon:CreateFont(theme.Font),
-			text = string.format(
-				"P:(%.2f, %.2f, %.2f) R:(%.2f, %.2f, %.2f)",
-				position.X,
-				position.Y,
-				position.Z,
-				rx,
-				ry,
-				rz
-			),
-			Color = theme.TextColor,
+			text = value and value.Name or "None",
+			Color = value and theme.TextColor or theme.SecondaryTextColor,
+			theme = theme,
 			engine_window = renderer.Window,
 		}, dt)
+
+		if
+			value
+			and renderer:HasClicked({
+				x = prop_x,
+				y = prop_y,
+				width = referenceWidth,
+				height = 16,
+			})
+		then
+			Selection:Set({ value })
+		end
+
+		Immco.TextButton({
+			x = prop_x + referenceWidth + 4,
+			y = prop_y,
+			width = clearWidth,
+			height = 16,
+
+			text = "×",
+			Color = theme.InputColor,
+			TextColor = theme.SecondaryTextColor,
+
+			theme = theme,
+			engine_window = renderer.Window,
+		}, dt)
+
+		if
+			renderer:HasClicked({
+				x = prop_x + referenceWidth + 4,
+				y = prop_y,
+				width = clearWidth,
+				height = 16,
+			})
+		then
+			firstObj[prop.name] = nil
+		end
 	end,
 
 	default = function(prop, firstObj, prop_x, prop_y, dt, width)
@@ -654,15 +806,15 @@ renderer.Pool.new("2d", function()
 
 		callback = function(params)
 			Immco.Scroller({
-				id = "main-explorer",
+				id = "main-inspector",
+
+				ViewHeight = params.height - 40,
+				ContentHeight = inspectorContentHeight,
 
 				x = params.x,
 				y = params.y,
 				width = params.width,
 				height = params.height,
-
-				ViewHeight = params.height - 40,
-				ContentHeight = 500,
 
 				ScrollSpeed = 50,
 				ScrollLerpSpeed = 20,
@@ -697,6 +849,7 @@ renderer.Pool.new("2d", function()
 					local object = Selection.Get()
 
 					if not object or not object[1] then
+						inspectorContentHeight = 28 + searchBoxHeight
 						return
 					end
 
@@ -761,7 +914,16 @@ renderer.Pool.new("2d", function()
 						local x = params.x + (6 * uiScale)
 						local groupTop = rowY - (18 * uiScale)
 						local width = params.width - (12 * uiScale)
-						local groupHeight = headerHeight + (propCount * rowHeight) + groupBottomPadding
+						local propertiesHeight = 0
+
+						if isExpanded then
+							for _, prop in ipairs(props) do
+								local adapterType = typeof(prop.value)
+								propertiesHeight += adapterHeights[adapterType] or rowHeight
+							end
+						end
+
+						local groupHeight = headerHeight + propertiesHeight + groupBottomPadding
 
 						Argon:Save(renderer.Window)
 
@@ -840,7 +1002,10 @@ renderer.Pool.new("2d", function()
 
 						if isExpanded then
 							local propertiesTop = rowY - 15
-							local propertiesHeight = #props * rowHeight
+
+							for _, prop in ipairs(props) do
+								propertiesHeight += adapterHeights[typeof(prop.value)] or rowHeight
+							end
 
 							Argon:Save(renderer.Window)
 
@@ -857,7 +1022,8 @@ renderer.Pool.new("2d", function()
 								local propertyX = x + propertyPadding
 								local propertyY = rowY - 15
 								local propertyWidth = width - (propertyPadding * 2)
-								local propertyHeight = rowHeight
+								local adapterType = typeof(prop.value)
+								local propertyHeight = adapterHeights[adapterType] or rowHeight
 
 								local separatorX = propertyX + (propertyWidth * 0.5)
 
@@ -884,11 +1050,10 @@ renderer.Pool.new("2d", function()
 								local prop_x = separatorX + (4 * uiScale)
 								local prop_y = rowY - 15
 
-								local adapterType = typeof(prop.value)
 								local adapter = adapters[adapterType] or adapters.default
 								adapter(prop, firstObj, prop_x, prop_y, dt, (propertyWidth * 0.5) - 10)
 
-								rowY += rowHeight
+								rowY += propertyHeight
 							end
 
 							Argon:Restore(renderer.Window)
@@ -896,6 +1061,7 @@ renderer.Pool.new("2d", function()
 
 						rowY += groupBottomPadding
 						rowY += 6 * uiScale
+						inspectorContentHeight = rowY - params.y
 					end
 				end,
 			}, dt)

@@ -2,6 +2,7 @@ local typedefs = require("../typedefs")
 local Rectangle = require("./Rectangle")
 local Text = require("./Text")
 local argon = require("@Argon")
+local Overlay = require("./Overlay")
 
 local LEFT_MOUSE_BUTTON = 1
 local TEXT_SIZE = 13
@@ -177,65 +178,70 @@ return function(params: typedefs.DropdownParams, dt: number): (number, boolean, 
 	}, dt)
 
 	if field.openAmount > 0.01 then
-		local animatedHeight = listHeight * field.openAmount
+		Overlay.Push(renderer, function()
+			local animatedHeight = listHeight * field.openAmount
 
-		argon:Save(window)
-		argon:ClipRoundRect(window, {
-			x = listRect.x,
-			y = listRect.y,
-			width = listRect.width,
-			height = animatedHeight,
-		}, cornerRadius, cornerRadius)
+			argon:Save(window)
 
-		Rectangle({
-			x = listRect.x,
-			y = listRect.y,
-			width = listRect.width,
-			height = animatedHeight,
-			Color = theme.ThirdColor,
-			theme = theme,
-			engine_window = window,
-		}, dt)
+			argon:ClipRoundRect(window, {
+				x = listRect.x,
+				y = listRect.y,
+				width = listRect.width,
+				height = animatedHeight,
+			}, cornerRadius, cornerRadius)
 
-		for index, option in ipairs(options) do
-			local optionY = listRect.y + (index - 1) * optionHeight - listScrollY
-			if optionY + optionHeight >= listRect.y and optionY <= listRect.y + animatedHeight then
-				if index == field.selected then
-					Rectangle({
-						x = listRect.x,
-						y = optionY,
-						width = listRect.width,
-						height = optionHeight,
-						Color = theme.AccentColor,
+			Rectangle({
+				x = listRect.x,
+				y = listRect.y,
+				width = listRect.width,
+				height = animatedHeight,
+				Color = theme.ThirdColor,
+				theme = theme,
+				engine_window = window,
+			}, dt)
+
+			for index, option in ipairs(options) do
+				local optionY = listRect.y + (index - 1) * optionHeight - listScrollY
+
+				if optionY + optionHeight >= listRect.y and optionY <= listRect.y + animatedHeight then
+					if index == field.selected then
+						Rectangle({
+							x = listRect.x,
+							y = optionY,
+							width = listRect.width,
+							height = optionHeight,
+							Color = theme.AccentColor,
+							theme = theme,
+							engine_window = window,
+						}, dt)
+					elseif index == field.hoverIndex then
+						Rectangle({
+							x = listRect.x,
+							y = optionY,
+							width = listRect.width,
+							height = optionHeight,
+							Color = theme.SecondaryColor,
+							theme = theme,
+							engine_window = window,
+						}, dt)
+					end
+
+					Text({
+						x = listRect.x + (params.Padding or 8),
+						y = optionY + (optionHeight - textHeight) / 2 + textAscent,
+
+						TextSize = TEXT_SIZE,
 						theme = theme,
-						engine_window = window,
-					}, dt)
-				elseif index == field.hoverIndex then
-					Rectangle({
-						x = listRect.x,
-						y = optionY,
-						width = listRect.width,
-						height = optionHeight,
-						Color = theme.SecondaryColor,
-						theme = theme,
+						Font = font,
+						text = optionText(option),
+						Color = theme.TextColor,
 						engine_window = window,
 					}, dt)
 				end
-
-				Text({
-					x = listRect.x + (params.Padding or 8),
-					y = optionY + (optionHeight - textHeight) / 2 + textAscent,
-					TextSize = TEXT_SIZE,
-					theme = theme,
-					Font = font,
-					text = optionText(option),
-					Color = theme.TextColor,
-					engine_window = window,
-				}, dt)
 			end
-		end
 
-		argon:Restore(window)
+			argon:Restore(window)
+		end)
 	end
 
 	return field.selected, field.open, selectedOption and optionValue(selectedOption) or nil

@@ -193,7 +193,12 @@ if(KINE_WITH_FILAMENT)
             set(ASSIMP_BUILD_ASSIMP_TOOLS OFF CACHE BOOL "" FORCE)
             set(ASSIMP_INSTALL OFF CACHE BOOL "" FORCE)
             set(ASSIMP_WARNINGS_AS_ERRORS OFF CACHE BOOL "" FORCE)
-            set(ASSIMP_BUILD_ZLIB ON CACHE BOOL "Build a PIC zlib instead of selecting a non-PIC system archive" FORCE)
+            if(APPLE)
+                find_package(ZLIB REQUIRED)
+                set(ASSIMP_BUILD_ZLIB OFF CACHE BOOL "" FORCE)
+            else()
+                set(ASSIMP_BUILD_ZLIB ON CACHE BOOL "Build a PIC zlib instead of selecting a non-PIC system archive" FORCE)
+            endif()
             set(ASSIMP_BUILD_ALL_IMPORTERS_BY_DEFAULT OFF CACHE BOOL "" FORCE)
             set(ASSIMP_BUILD_ALL_EXPORTERS_BY_DEFAULT OFF CACHE BOOL "" FORCE)
             set(ASSIMP_BUILD_3MF_IMPORTER ON CACHE BOOL "" FORCE)
@@ -282,7 +287,17 @@ if(KINE_WITH_FILAMENT)
         uberarchive
         shaders
     )
-    target_link_libraries(kine_filament_shim PUBLIC ${KINE_FILAMENT_CORE_LIBS})
+    if(UNIX AND NOT APPLE)
+        list(JOIN KINE_FILAMENT_CORE_LIBS "," KINE_FILAMENT_CORE_LIBS_GROUP)
+
+        target_link_libraries(kine_filament_shim PUBLIC
+            "$<LINK_GROUP:RESCAN,${KINE_FILAMENT_CORE_LIBS_GROUP}>"
+        )
+    else()
+        target_link_libraries(kine_filament_shim PUBLIC
+            ${KINE_FILAMENT_CORE_LIBS}
+        )
+    endif()
 
     if(WIN32)
         target_link_libraries(kine_filament_shim

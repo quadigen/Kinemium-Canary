@@ -1,12 +1,20 @@
--- description: "Bone attachment, Not used for anything currently."
+-- description: "A hierarchical joint that deforms vertices in a skinned MeshPart."
 local CFrame = require("@CFrame")
+local Attachment = require("@Attachment")
 
 local propTable = {
 	Name = "Bone",
-	BaseClass = "Kinemium.attachment",
+	BaseClass = "Attachment",
 
 	Transform = CFrame.new(),
+	TransformedCFrame = CFrame.new(),
+	TransformedWorldCFrame = CFrame.new(),
+	BoneId = -1,
 }
+
+Attachment.inherit(propTable)
+propTable.Name = "Bone"
+propTable.BaseClass = "Attachment"
 
 return {
 	class = "Bone",

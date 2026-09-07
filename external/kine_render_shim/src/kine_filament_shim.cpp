@@ -254,14 +254,68 @@ struct KineTerrainWeights {
     float values[8];
 };
 
+struct KineSkinVertex {
+    uint8_t joints[4] = {0, 0, 0, 0};
+    float weights[4] = {1.0f, 0.0f, 0.0f, 0.0f};
+};
+
+struct KineQuat {
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+    float w = 1.0f;
+};
+
+struct KineVecKey {
+    float time = 0.0f;
+    math::float3 value{};
+};
+
+struct KineQuatKey {
+    float time = 0.0f;
+    KineQuat value{};
+};
+
+struct KineBone {
+    std::string name;
+    int parent = -1;
+    math::float3 bindTranslation{};
+    KineQuat bindRotation{};
+    math::float3 bindScale{1.0f, 1.0f, 1.0f};
+    math::mat4f bindLocal{};
+    math::mat4f inverseBind{};
+};
+
+struct KineAnimationChannel {
+    int bone = -1;
+    std::vector<KineVecKey> translations;
+    std::vector<KineQuatKey> rotations;
+    std::vector<KineVecKey> scales;
+};
+
+struct KineAnimation {
+    std::string name;
+    float duration = 0.0f;
+    std::vector<KineAnimationChannel> channels;
+};
+
 struct KineMesh {
     VertexBuffer* vb       = nullptr;
     IndexBuffer*  ib       = nullptr;
     uint32_t      indexCount = 0;
     std::vector<KineVertex>  vertices;
     std::vector<KineTerrainWeights> terrainWeights;
+    std::vector<KineSkinVertex> skinVertices;
     std::vector<uint16_t>    indices;
+    std::vector<KineBone> bones;
+    std::vector<math::mat4f> skinMatrices;
+    std::vector<KineAnimation> animations;
     Box localBounds;
+};
+
+struct KineCpuMeshData {
+    std::vector<math::float3> positions;
+    std::vector<uint32_t> indices;
 };
 
 struct KineTexHandle {
@@ -1522,6 +1576,139 @@ static KineGizmoAxisMeshes buildRotateGizmoAxes()
 }
 
 #if KINE_WITH_ASSIMP
+static math::mat4f kine_from_assimp(const aiMatrix4x4& m)
+{
+    return math::mat4f(
+        math::float4{m.a1, m.b1, m.c1, m.d1},
+        math::float4{m.a2, m.b2, m.c2, m.d2},
+        math::float4{m.a3, m.b3, m.c3, m.d3},
+        math::float4{m.a4, m.b4, m.c4, m.d4});
+}
+
+static KineQuat kine_from_assimp(const aiQuaternion& q)
+{
+    return {q.x, q.y, q.z, q.w};
+}
+
+static void kine_collect_assimp_nodes(
+    aiNode* node,
+    const aiMatrix4x4& parentGlobal,
+    std::unordered_map<std::string, aiNode*>& nodes,
+    std::unordered_map<aiNode*, aiMatrix4x4>& globals)
+{
+    if (!node) return;
+    const aiMatrix4x4 global = parentGlobal * node->mTransformation;
+    nodes[node->mName.C_Str()] = node;
+    globals[node] = global;
+    for (unsigned int i = 0; i < node->mNumChildren; ++i) {
+        kine_collect_assimp_nodes(node->mChildren[i], global, nodes, globals);
+    }
+}
+
+static void kine_add_vertex_influence(KineSkinVertex& skin, uint8_t joint, float weight)
+{
+    if (weight <= 0.0f) return;
+    int slot = -1;
+    for (int i = 0; i < 4; ++i) {
+        if (skin.weights[i] == 0.0f) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot < 0) {
+        slot = 0;
+        for (int i = 1; i < 4; ++i) {
+            if (skin.weights[i] < skin.weights[slot]) slot = i;
+        }
+        if (weight <= skin.weights[slot]) return;
+    }
+    skin.joints[slot] = joint;
+    skin.weights[slot] = weight;
+}
+
+static bool kine_append_assimp_node(
+    KineMesh* out,
+    const aiScene* scene,
+    aiNode* node,
+    const aiMatrix4x4& parentGlobal,
+    const std::unordered_map<std::string, int>& boneIndices)
+{
+    if (!out || !scene || !node) return false;
+    const aiMatrix4x4 global = parentGlobal * node->mTransformation;
+    const bool skinnedModel = !out->bones.empty();
+
+    for (unsigned int nodeMeshIndex = 0; nodeMeshIndex < node->mNumMeshes; ++nodeMeshIndex) {
+        const unsigned int sceneMeshIndex = node->mMeshes[nodeMeshIndex];
+        if (sceneMeshIndex >= scene->mNumMeshes) continue;
+        const aiMesh* src = scene->mMeshes[sceneMeshIndex];
+        if (!src || src->mNumVertices == 0 || src->mNumFaces == 0) continue;
+        if (out->vertices.size() + src->mNumVertices > 65535) return false;
+
+        const uint16_t base = (uint16_t)out->vertices.size();
+        aiMatrix3x3 normalMatrix(global);
+        normalMatrix.Inverse().Transpose();
+        for (unsigned int i = 0; i < src->mNumVertices; ++i) {
+            aiVector3D p = src->mVertices[i];
+            aiVector3D n = src->HasNormals() ? src->mNormals[i] : aiVector3D(0.0f, 1.0f, 0.0f);
+            if (!skinnedModel) {
+                p = global * p;
+                n = normalMatrix * n;
+                n.Normalize();
+            }
+            const aiVector3D uv = src->HasTextureCoords(0)
+                ? src->mTextureCoords[0][i]
+                : aiVector3D(0.0f, 0.0f, 0.0f);
+            out->vertices.push_back({p.x, p.y, p.z, n.x, n.y, n.z, uv.x, uv.y});
+            if (skinnedModel) {
+                KineSkinVertex skin;
+                for (float& value : skin.weights) value = 0.0f;
+                out->skinVertices.push_back(skin);
+            }
+        }
+
+        if (skinnedModel) {
+            for (unsigned int srcBoneIndex = 0; srcBoneIndex < src->mNumBones; ++srcBoneIndex) {
+                const aiBone* srcBone = src->mBones[srcBoneIndex];
+                if (!srcBone) continue;
+                const auto found = boneIndices.find(srcBone->mName.C_Str());
+                if (found == boneIndices.end()) continue;
+                for (unsigned int weightIndex = 0; weightIndex < srcBone->mNumWeights; ++weightIndex) {
+                    const aiVertexWeight& influence = srcBone->mWeights[weightIndex];
+                    if (influence.mVertexId >= src->mNumVertices) continue;
+                    kine_add_vertex_influence(
+                        out->skinVertices[(size_t)base + influence.mVertexId],
+                        (uint8_t)found->second,
+                        influence.mWeight);
+                }
+            }
+            for (unsigned int i = 0; i < src->mNumVertices; ++i) {
+                KineSkinVertex& skin = out->skinVertices[(size_t)base + i];
+                float total = 0.0f;
+                for (float weight : skin.weights) total += weight;
+                if (total <= 0.000001f) {
+                    skin.joints[0] = 0;
+                    skin.weights[0] = 1.0f;
+                } else {
+                    for (float& weight : skin.weights) weight /= total;
+                }
+            }
+        }
+
+        for (unsigned int i = 0; i < src->mNumFaces; ++i) {
+            const aiFace& face = src->mFaces[i];
+            if (face.mNumIndices != 3) continue;
+            out->indices.push_back(base + (uint16_t)face.mIndices[0]);
+            out->indices.push_back(base + (uint16_t)face.mIndices[1]);
+            out->indices.push_back(base + (uint16_t)face.mIndices[2]);
+        }
+    }
+
+    for (unsigned int i = 0; i < node->mNumChildren; ++i) {
+        if (!kine_append_assimp_node(out, scene, node->mChildren[i], global, boneIndices)) return false;
+    }
+    return true;
+}
+
 static KineMesh* loadMeshWithAssimp(const char* path)
 {
     Assimp::Importer importer;
@@ -1530,7 +1717,6 @@ static KineMesh* loadMeshWithAssimp(const char* path)
         aiProcess_Triangulate |
         aiProcess_JoinIdenticalVertices |
         aiProcess_GenSmoothNormals |
-        aiProcess_PreTransformVertices |
         aiProcess_ImproveCacheLocality |
         aiProcess_RemoveRedundantMaterials |
         aiProcess_SortByPType
@@ -1539,32 +1725,79 @@ static KineMesh* loadMeshWithAssimp(const char* path)
         fprintf(stderr, "[Kine] Assimp failed to load mesh '%s': %s\n", path, importer.GetErrorString());
         return nullptr;
     }
-
     auto* m = new KineMesh();
+    std::unordered_map<std::string, int> boneIndices;
+    std::unordered_map<std::string, aiMatrix4x4> inverseBinds;
     for (unsigned int meshIndex = 0; meshIndex < scene->mNumMeshes; ++meshIndex) {
         const aiMesh* src = scene->mMeshes[meshIndex];
-        if (!src || src->mNumVertices == 0 || src->mNumFaces == 0) continue;
-        if (m->vertices.size() + src->mNumVertices > 65535) {
-            fprintf(stderr, "[Kine] Assimp mesh '%s' exceeds the current 65535 vertex limit\n", path);
-            delete m;
-            return nullptr;
+        if (!src) continue;
+        for (unsigned int srcBoneIndex = 0; srcBoneIndex < src->mNumBones; ++srcBoneIndex) {
+            const aiBone* srcBone = src->mBones[srcBoneIndex];
+            if (!srcBone) continue;
+            const std::string name = srcBone->mName.C_Str();
+            if (boneIndices.find(name) == boneIndices.end()) {
+                if (boneIndices.size() >= 255) {
+                    fprintf(stderr, "[Kine] Assimp mesh '%s' exceeds Filament's 255 bone limit\n", path);
+                    delete m;
+                    return nullptr;
+                }
+                boneIndices[name] = (int)boneIndices.size();
+                inverseBinds[name] = srcBone->mOffsetMatrix;
+            }
+        }
+    }
+
+    std::unordered_map<std::string, aiNode*> nodes;
+    std::unordered_map<aiNode*, aiMatrix4x4> globals;
+    kine_collect_assimp_nodes(scene->mRootNode, aiMatrix4x4(), nodes, globals);
+    aiMatrix4x4 rootInverse = scene->mRootNode->mTransformation;
+    rootInverse.Inverse();
+
+    m->bones.resize(boneIndices.size());
+    for (const auto& entry : boneIndices) {
+        const std::string& name = entry.first;
+        const int index = entry.second;
+        KineBone& bone = m->bones[index];
+        bone.name = name;
+        bone.inverseBind = kine_from_assimp(inverseBinds[name]);
+
+        aiNode* node = nullptr;
+        const auto nodeIt = nodes.find(name);
+        if (nodeIt != nodes.end()) node = nodeIt->second;
+        aiNode* parent = node ? node->mParent : nullptr;
+        while (parent) {
+            const auto parentIt = boneIndices.find(parent->mName.C_Str());
+            if (parentIt != boneIndices.end()) {
+                bone.parent = parentIt->second;
+                break;
+            }
+            parent = parent->mParent;
         }
 
-        uint16_t base = (uint16_t)m->vertices.size();
-        for (unsigned int i = 0; i < src->mNumVertices; ++i) {
-            const aiVector3D& p = src->mVertices[i];
-            aiVector3D n = src->HasNormals() ? src->mNormals[i] : aiVector3D(0.0f, 1.0f, 0.0f);
-            aiVector3D uv = src->HasTextureCoords(0) ? src->mTextureCoords[0][i] : aiVector3D(0.0f, 0.0f, 0.0f);
-            m->vertices.push_back({p.x, p.y, p.z, n.x, n.y, n.z, uv.x, uv.y});
+        aiMatrix4x4 local;
+        if (node) {
+            const aiMatrix4x4 boneGlobal = rootInverse * globals[node];
+            if (bone.parent >= 0) {
+                aiMatrix4x4 parentGlobal = rootInverse * globals[parent];
+                parentGlobal.Inverse();
+                local = parentGlobal * boneGlobal;
+            } else {
+                local = boneGlobal;
+            }
         }
+        aiVector3D scaling(1.0f, 1.0f, 1.0f), position(0.0f, 0.0f, 0.0f);
+        aiQuaternion rotation;
+        local.Decompose(scaling, rotation, position);
+        bone.bindTranslation = {position.x, position.y, position.z};
+        bone.bindRotation = kine_from_assimp(rotation);
+        bone.bindScale = {scaling.x, scaling.y, scaling.z};
+        bone.bindLocal = kine_from_assimp(local);
+    }
 
-        for (unsigned int i = 0; i < src->mNumFaces; ++i) {
-            const aiFace& f = src->mFaces[i];
-            if (f.mNumIndices != 3) continue;
-            m->indices.push_back(base + (uint16_t)f.mIndices[0]);
-            m->indices.push_back(base + (uint16_t)f.mIndices[1]);
-            m->indices.push_back(base + (uint16_t)f.mIndices[2]);
-        }
+    if (!kine_append_assimp_node(m, scene, scene->mRootNode, aiMatrix4x4(), boneIndices)) {
+        fprintf(stderr, "[Kine] Assimp mesh '%s' exceeds the current 65535 vertex limit\n", path);
+        delete m;
+        return nullptr;
     }
 
     if (m->vertices.empty() || m->indices.empty()) {
@@ -1573,6 +1806,60 @@ static KineMesh* loadMeshWithAssimp(const char* path)
     }
 
     m->indexCount = (uint32_t)m->indices.size();
+    if (!m->bones.empty()) {
+        m->skinMatrices.resize(m->bones.size());
+        std::vector<math::mat4f> globalsByBone(m->bones.size());
+        for (size_t i = 0; i < m->bones.size(); ++i) {
+            globalsByBone[i] = m->bones[i].parent >= 0
+                ? globalsByBone[(size_t)m->bones[i].parent] * m->bones[i].bindLocal
+                : m->bones[i].bindLocal;
+            m->skinMatrices[i] = globalsByBone[i] * m->bones[i].inverseBind;
+        }
+    }
+
+    for (unsigned int animationIndex = 0; animationIndex < scene->mNumAnimations; ++animationIndex) {
+        const aiAnimation* sourceAnimation = scene->mAnimations[animationIndex];
+        if (!sourceAnimation) continue;
+        const double ticksPerSecond = sourceAnimation->mTicksPerSecond > 0.0
+            ? sourceAnimation->mTicksPerSecond
+            : 25.0;
+        KineAnimation animation;
+        animation.name = sourceAnimation->mName.length > 0
+            ? sourceAnimation->mName.C_Str()
+            : ("Animation" + std::to_string(animationIndex + 1));
+        animation.duration = (float)(sourceAnimation->mDuration / ticksPerSecond);
+        for (unsigned int channelIndex = 0; channelIndex < sourceAnimation->mNumChannels; ++channelIndex) {
+            const aiNodeAnim* sourceChannel = sourceAnimation->mChannels[channelIndex];
+            if (!sourceChannel) continue;
+            const auto boneIt = boneIndices.find(sourceChannel->mNodeName.C_Str());
+            if (boneIt == boneIndices.end()) continue;
+            KineAnimationChannel channel;
+            channel.bone = boneIt->second;
+            channel.translations.reserve(sourceChannel->mNumPositionKeys);
+            channel.rotations.reserve(sourceChannel->mNumRotationKeys);
+            channel.scales.reserve(sourceChannel->mNumScalingKeys);
+            for (unsigned int i = 0; i < sourceChannel->mNumPositionKeys; ++i) {
+                const aiVectorKey& key = sourceChannel->mPositionKeys[i];
+                channel.translations.push_back({
+                    (float)(key.mTime / ticksPerSecond),
+                    {key.mValue.x, key.mValue.y, key.mValue.z}});
+            }
+            for (unsigned int i = 0; i < sourceChannel->mNumRotationKeys; ++i) {
+                const aiQuatKey& key = sourceChannel->mRotationKeys[i];
+                channel.rotations.push_back({
+                    (float)(key.mTime / ticksPerSecond),
+                    kine_from_assimp(key.mValue)});
+            }
+            for (unsigned int i = 0; i < sourceChannel->mNumScalingKeys; ++i) {
+                const aiVectorKey& key = sourceChannel->mScalingKeys[i];
+                channel.scales.push_back({
+                    (float)(key.mTime / ticksPerSecond),
+                    {key.mValue.x, key.mValue.y, key.mValue.z}});
+            }
+            animation.channels.push_back(std::move(channel));
+        }
+        m->animations.push_back(std::move(animation));
+    }
     return m;
 }
 #endif
@@ -1639,10 +1926,11 @@ static void uploadMesh(KineMesh* m, Engine* engine)
     delete orientation;
 
     const bool hasTerrainWeights = m->terrainWeights.size() == m->vertices.size();
+    const bool hasSkin = !m->bones.empty() && m->skinVertices.size() == m->vertices.size();
     VertexBuffer::Builder vertexBufferBuilder;
     vertexBufferBuilder
         .vertexCount((uint32_t)m->vertices.size())
-        .bufferCount(hasTerrainWeights ? 3 : 2)
+        .bufferCount((hasTerrainWeights || hasSkin) ? 3 : 2)
         .attribute(VertexAttribute::POSITION, 0, VertexBuffer::AttributeType::FLOAT3, offsetof(KineVertex, px), sizeof(KineVertex))
         .attribute(VertexAttribute::UV0,      0, VertexBuffer::AttributeType::FLOAT2, offsetof(KineVertex, u),  sizeof(KineVertex))
         .attribute(VertexAttribute::TANGENTS, 1, VertexBuffer::AttributeType::SHORT4, 0, sizeof(math::short4))
@@ -1651,6 +1939,12 @@ static void uploadMesh(KineMesh* m, Engine* engine)
         vertexBufferBuilder
             .attribute(VertexAttribute::CUSTOM0, 2, VertexBuffer::AttributeType::FLOAT4, 0, sizeof(KineTerrainWeights))
             .attribute(VertexAttribute::CUSTOM1, 2, VertexBuffer::AttributeType::FLOAT4, 4 * sizeof(float), sizeof(KineTerrainWeights));
+    } else if (hasSkin) {
+        vertexBufferBuilder
+            .attribute(VertexAttribute::BONE_INDICES, 2, VertexBuffer::AttributeType::UBYTE4,
+                offsetof(KineSkinVertex, joints), sizeof(KineSkinVertex))
+            .attribute(VertexAttribute::BONE_WEIGHTS, 2, VertexBuffer::AttributeType::FLOAT4,
+                offsetof(KineSkinVertex, weights), sizeof(KineSkinVertex));
     }
     m->vb = vertexBufferBuilder.build(*engine);
 
@@ -1675,6 +1969,13 @@ static void uploadMesh(KineMesh* m, Engine* engine)
         memcpy(weightCopy, m->terrainWeights.data(), weightSize);
         m->vb->setBufferAt(*engine, 2,
             VertexBuffer::BufferDescriptor(weightCopy, weightSize,
+                [](void* buf, size_t, void*){ free(buf); }, nullptr));
+    } else if (hasSkin) {
+        const size_t skinSize = m->skinVertices.size() * sizeof(KineSkinVertex);
+        void* skinCopy = malloc(skinSize);
+        memcpy(skinCopy, m->skinVertices.data(), skinSize);
+        m->vb->setBufferAt(*engine, 2,
+            VertexBuffer::BufferDescriptor(skinCopy, skinSize,
                 [](void* buf, size_t, void*){ free(buf); }, nullptr));
     }
 
@@ -2014,6 +2315,9 @@ static bool kine_rebuild_instance_batch(KineFilamentInstanceBatch* batch)
             .receiveShadows(batch->key.receiveShadow)
             .castShadows(batch->key.castShadow)
             .instances(count, instanceBuffer);
+        if (!mesh->bones.empty() && mesh->skinMatrices.size() == mesh->bones.size()) {
+            renderableBuilder.skinning(mesh->skinMatrices.size(), mesh->skinMatrices.data());
+        }
         if (batch->key.materialKind == KINE_MAT_GLASS) {
             // Filament reserves channels 0/1 for the opaque scene copies used
             // by screen-space refraction.
@@ -2285,6 +2589,9 @@ static void kine_update_batches(KineFilamentContext* ctx)
                     .receiveShadows(key.receiveShadow)
                     .castShadows(key.castShadow)
                     .instances(count, instanceBuffer);
+                if (!m->bones.empty() && m->skinMatrices.size() == m->bones.size()) {
+                    renderableBuilder.skinning(m->skinMatrices.size(), m->skinMatrices.data());
+                }
                 if (key.materialKind == KINE_MAT_GLASS) {
                     // Glass is the first translucent material submitted after
                     // Filament's opaque pass. This keeps other transparent
@@ -4269,6 +4576,161 @@ KINE_API void Kine_Filament_SetCameraPerspective(
 //          10 = move gizmo, 11 = rotate gizmo, 12 = scale gizmo
 // ---------------------------------------------------------------------------
 
+extern "C++" {
+
+static math::mat4f kine_from_row_major(const float* m)
+{
+    return math::mat4f(
+        math::float4{m[0], m[4], m[8], m[12]},
+        math::float4{m[1], m[5], m[9], m[13]},
+        math::float4{m[2], m[6], m[10], m[14]},
+        math::float4{m[3], m[7], m[11], m[15]});
+}
+
+static void kine_to_row_major(const math::mat4f& m, float* out)
+{
+    for (int row = 0; row < 4; ++row) {
+        for (int column = 0; column < 4; ++column) {
+            out[row * 4 + column] = m[column][row];
+        }
+    }
+}
+
+static math::float3 kine_lerp(const math::float3& a, const math::float3& b, float t)
+{
+    return a + (b - a) * t;
+}
+
+static KineQuat kine_normalize_quat(KineQuat q)
+{
+    const float length = std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
+    if (length <= 0.000001f) return {};
+    q.x /= length;
+    q.y /= length;
+    q.z /= length;
+    q.w /= length;
+    return q;
+}
+
+static KineQuat kine_slerp(KineQuat a, KineQuat b, float t)
+{
+    a = kine_normalize_quat(a);
+    b = kine_normalize_quat(b);
+    float dot = a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
+    if (dot < 0.0f) {
+        dot = -dot;
+        b.x = -b.x; b.y = -b.y; b.z = -b.z; b.w = -b.w;
+    }
+    if (dot > 0.9995f) {
+        return kine_normalize_quat({
+            a.x + (b.x - a.x) * t,
+            a.y + (b.y - a.y) * t,
+            a.z + (b.z - a.z) * t,
+            a.w + (b.w - a.w) * t});
+    }
+    const float angle = std::acos(std::clamp(dot, -1.0f, 1.0f));
+    const float denominator = std::sin(angle);
+    const float aWeight = std::sin((1.0f - t) * angle) / denominator;
+    const float bWeight = std::sin(t * angle) / denominator;
+    return {
+        a.x * aWeight + b.x * bWeight,
+        a.y * aWeight + b.y * bWeight,
+        a.z * aWeight + b.z * bWeight,
+        a.w * aWeight + b.w * bWeight};
+}
+
+static math::mat4f kine_compose_trs(
+    const math::float3& translation, KineQuat rotation, const math::float3& scale)
+{
+    rotation = kine_normalize_quat(rotation);
+    const float x = rotation.x, y = rotation.y, z = rotation.z, w = rotation.w;
+    const float xx = x * x, yy = y * y, zz = z * z;
+    const float xy = x * y, xz = x * z, yz = y * z;
+    const float wx = w * x, wy = w * y, wz = w * z;
+    return math::mat4f(
+        math::float4{(1.0f - 2.0f * (yy + zz)) * scale.x,
+                     (2.0f * (xy + wz)) * scale.x,
+                     (2.0f * (xz - wy)) * scale.x, 0.0f},
+        math::float4{(2.0f * (xy - wz)) * scale.y,
+                     (1.0f - 2.0f * (xx + zz)) * scale.y,
+                     (2.0f * (yz + wx)) * scale.y, 0.0f},
+        math::float4{(2.0f * (xz + wy)) * scale.z,
+                     (2.0f * (yz - wx)) * scale.z,
+                     (1.0f - 2.0f * (xx + yy)) * scale.z, 0.0f},
+        math::float4{translation.x, translation.y, translation.z, 1.0f});
+}
+
+static math::float3 kine_sample_vec(
+    const std::vector<KineVecKey>& keys, float time, const math::float3& fallback)
+{
+    if (keys.empty()) return fallback;
+    if (keys.size() == 1 || time <= keys.front().time) return keys.front().value;
+    if (time >= keys.back().time) return keys.back().value;
+    auto upper = std::upper_bound(keys.begin(), keys.end(), time,
+        [](float value, const KineVecKey& key) { return value < key.time; });
+    const KineVecKey& b = *upper;
+    const KineVecKey& a = *(upper - 1);
+    const float span = b.time - a.time;
+    return kine_lerp(a.value, b.value, span > 0.0f ? (time - a.time) / span : 0.0f);
+}
+
+static KineQuat kine_sample_quat(
+    const std::vector<KineQuatKey>& keys, float time, const KineQuat& fallback)
+{
+    if (keys.empty()) return fallback;
+    if (keys.size() == 1 || time <= keys.front().time) return keys.front().value;
+    if (time >= keys.back().time) return keys.back().value;
+    auto upper = std::upper_bound(keys.begin(), keys.end(), time,
+        [](float value, const KineQuatKey& key) { return value < key.time; });
+    const KineQuatKey& b = *upper;
+    const KineQuatKey& a = *(upper - 1);
+    const float span = b.time - a.time;
+    return kine_slerp(a.value, b.value, span > 0.0f ? (time - a.time) / span : 0.0f);
+}
+
+static bool kine_eval_bone_global(
+    size_t index,
+    const KineMesh* mesh,
+    const std::vector<math::mat4f>& locals,
+    std::vector<math::mat4f>& globals,
+    std::vector<uint8_t>& states)
+{
+    if (states[index] == 2) return true;
+    if (states[index] == 1) return false;
+    states[index] = 1;
+    const int parent = mesh->bones[index].parent;
+    if (parent >= 0 && (size_t)parent < mesh->bones.size()) {
+        if (!kine_eval_bone_global((size_t)parent, mesh, locals, globals, states)) return false;
+        globals[index] = globals[(size_t)parent] * locals[index];
+    } else {
+        globals[index] = locals[index];
+    }
+    states[index] = 2;
+    return true;
+}
+
+static void kine_upload_skin_pose(KineFilamentContext* ctx, KineMesh* mesh)
+{
+    if (!ctx || !ctx->engine || !mesh || mesh->skinMatrices.empty()) return;
+    RenderableManager& manager = ctx->engine->getRenderableManager();
+    auto updateChunks = [&](const std::vector<KineBuiltBatch>& chunks) {
+        for (const KineBuiltBatch& chunk : chunks) {
+            const RenderableManager::Instance instance = manager.getInstance(chunk.entity);
+            if (instance.isValid()) {
+                manager.setBones(instance, mesh->skinMatrices.data(), mesh->skinMatrices.size());
+            }
+        }
+    };
+    for (KineFilamentInstanceBatch* batch : ctx->instanceBatches) {
+        if (batch && batch->key.mesh == mesh) updateChunks(batch->chunks);
+    }
+    for (auto& entry : ctx->builtBatches) {
+        if (entry.first.mesh == mesh) updateChunks(entry.second.chunks);
+    }
+}
+
+} // extern "C++"
+
 // kine_filament_shim.cpp
 KineFilamentMesh* Kine_Filament_CreateCustomMesh(
     KineFilamentContext* ctx,
@@ -4468,6 +4930,185 @@ KINE_API KineFilamentMesh* Kine_Filament_CreateMeshFromPath(KineFilamentContext*
     fprintf(stderr, "[Kine] CreateMeshFromPath requires KINE_WITH_ASSIMP=ON and assimp::assimp at build time\n");
     return nullptr;
 #endif
+}
+
+KINE_API int Kine_Filament_GetMeshBoneCount(const KineFilamentMesh* mesh)
+{
+    const auto* m = reinterpret_cast<const KineMesh*>(mesh);
+    return m ? (int)m->bones.size() : 0;
+}
+
+KINE_API const char* Kine_Filament_GetMeshBoneName(const KineFilamentMesh* mesh, int boneIndex)
+{
+    const auto* m = reinterpret_cast<const KineMesh*>(mesh);
+    if (!m || boneIndex < 0 || (size_t)boneIndex >= m->bones.size()) return nullptr;
+    return m->bones[(size_t)boneIndex].name.c_str();
+}
+
+KINE_API int Kine_Filament_GetMeshBoneParent(const KineFilamentMesh* mesh, int boneIndex)
+{
+    const auto* m = reinterpret_cast<const KineMesh*>(mesh);
+    if (!m || boneIndex < 0 || (size_t)boneIndex >= m->bones.size()) return -1;
+    return m->bones[(size_t)boneIndex].parent;
+}
+
+KINE_API bool Kine_Filament_CopyMeshBoneBindTransform(
+    const KineFilamentMesh* mesh, int boneIndex, float* outTransform16)
+{
+    const auto* m = reinterpret_cast<const KineMesh*>(mesh);
+    if (!m || !outTransform16 || boneIndex < 0 || (size_t)boneIndex >= m->bones.size()) return false;
+    kine_to_row_major(m->bones[(size_t)boneIndex].bindLocal, outTransform16);
+    return true;
+}
+
+KINE_API bool Kine_Filament_SetMeshBoneTransforms(
+    KineFilamentContext* ctx, KineFilamentMesh* mesh,
+    const float* boneTransforms16, int boneCount)
+{
+    auto* m = reinterpret_cast<KineMesh*>(mesh);
+    if (!ctx || !m || !boneTransforms16 || boneCount != (int)m->bones.size() || boneCount <= 0) return false;
+    m->skinMatrices.resize((size_t)boneCount);
+    for (int i = 0; i < boneCount; ++i) {
+        m->skinMatrices[(size_t)i] =
+            kine_from_row_major(boneTransforms16 + (size_t)i * 16u) * m->bones[(size_t)i].inverseBind;
+    }
+    kine_upload_skin_pose(ctx, m);
+    return true;
+}
+
+KINE_API int Kine_Filament_GetMeshAnimationCount(const KineFilamentMesh* mesh)
+{
+    const auto* m = reinterpret_cast<const KineMesh*>(mesh);
+    return m ? (int)m->animations.size() : 0;
+}
+
+KINE_API const char* Kine_Filament_GetMeshAnimationName(
+    const KineFilamentMesh* mesh, int animationIndex)
+{
+    const auto* m = reinterpret_cast<const KineMesh*>(mesh);
+    if (!m || animationIndex < 0 || (size_t)animationIndex >= m->animations.size()) return nullptr;
+    return m->animations[(size_t)animationIndex].name.c_str();
+}
+
+KINE_API float Kine_Filament_GetMeshAnimationDuration(
+    const KineFilamentMesh* mesh, int animationIndex)
+{
+    const auto* m = reinterpret_cast<const KineMesh*>(mesh);
+    if (!m || animationIndex < 0 || (size_t)animationIndex >= m->animations.size()) return 0.0f;
+    return m->animations[(size_t)animationIndex].duration;
+}
+
+KINE_API bool Kine_Filament_ApplyMeshAnimation(
+    KineFilamentContext* ctx, KineFilamentMesh* mesh,
+    int animationIndex, float timeSeconds, bool loop)
+{
+    auto* m = reinterpret_cast<KineMesh*>(mesh);
+    if (!ctx || !m || m->bones.empty() || animationIndex < 0 ||
+            (size_t)animationIndex >= m->animations.size()) return false;
+    const KineAnimation& animation = m->animations[(size_t)animationIndex];
+    float sampleTime = std::max(timeSeconds, 0.0f);
+    if (animation.duration > 0.0f) {
+        sampleTime = loop ? std::fmod(sampleTime, animation.duration)
+                          : std::min(sampleTime, animation.duration);
+    }
+
+    std::vector<math::float3> translations(m->bones.size());
+    std::vector<KineQuat> rotations(m->bones.size());
+    std::vector<math::float3> scales(m->bones.size());
+    for (size_t i = 0; i < m->bones.size(); ++i) {
+        translations[i] = m->bones[i].bindTranslation;
+        rotations[i] = m->bones[i].bindRotation;
+        scales[i] = m->bones[i].bindScale;
+    }
+    for (const KineAnimationChannel& channel : animation.channels) {
+        if (channel.bone < 0 || (size_t)channel.bone >= m->bones.size()) continue;
+        const size_t bone = (size_t)channel.bone;
+        translations[bone] = kine_sample_vec(channel.translations, sampleTime, translations[bone]);
+        rotations[bone] = kine_sample_quat(channel.rotations, sampleTime, rotations[bone]);
+        scales[bone] = kine_sample_vec(channel.scales, sampleTime, scales[bone]);
+    }
+
+    std::vector<math::mat4f> locals(m->bones.size());
+    std::vector<math::mat4f> globals(m->bones.size());
+    std::vector<uint8_t> states(m->bones.size(), 0);
+    m->skinMatrices.resize(m->bones.size());
+    for (size_t i = 0; i < m->bones.size(); ++i) {
+        locals[i] = kine_compose_trs(translations[i], rotations[i], scales[i]);
+    }
+    for (size_t i = 0; i < m->bones.size(); ++i) {
+        if (!kine_eval_bone_global(i, m, locals, globals, states)) return false;
+        m->skinMatrices[i] = globals[i] * m->bones[i].inverseBind;
+    }
+    kine_upload_skin_pose(ctx, m);
+    return true;
+}
+
+KINE_API KineFilamentMeshData* Kine_Filament_LoadMeshDataFromPath(const char* path)
+{
+    if (!path || path[0] == '\0') return nullptr;
+
+#if KINE_WITH_ASSIMP
+    KineMesh* source = loadMeshWithAssimp(path);
+    if (!source) return nullptr;
+
+    auto* result = new KineCpuMeshData();
+    result->positions.reserve(source->vertices.size());
+    result->indices.reserve(source->indices.size());
+    for (const KineVertex& vertex : source->vertices) {
+        result->positions.push_back({vertex.px, vertex.py, vertex.pz});
+    }
+    for (uint16_t index : source->indices) {
+        result->indices.push_back((uint32_t)index);
+    }
+    delete source;
+    return reinterpret_cast<KineFilamentMeshData*>(result);
+#else
+    fprintf(stderr, "[Kine] LoadMeshDataFromPath requires KINE_WITH_ASSIMP=ON and assimp::assimp at build time\n");
+    return nullptr;
+#endif
+}
+
+KINE_API int Kine_Filament_GetMeshDataVertexCount(const KineFilamentMeshData* meshData)
+{
+    const auto* data = reinterpret_cast<const KineCpuMeshData*>(meshData);
+    return data ? (int)data->positions.size() : 0;
+}
+
+KINE_API int Kine_Filament_GetMeshDataIndexCount(const KineFilamentMeshData* meshData)
+{
+    const auto* data = reinterpret_cast<const KineCpuMeshData*>(meshData);
+    return data ? (int)data->indices.size() : 0;
+}
+
+KINE_API bool Kine_Filament_CopyMeshDataPositions(
+    const KineFilamentMeshData* meshData, float* outPositions, int positionFloatCapacity)
+{
+    const auto* data = reinterpret_cast<const KineCpuMeshData*>(meshData);
+    const size_t required = data ? data->positions.size() * 3u : 0u;
+    if (!data || !outPositions || positionFloatCapacity < 0 || (size_t)positionFloatCapacity < required)
+        return false;
+    for (size_t i = 0; i < data->positions.size(); ++i) {
+        outPositions[i * 3u] = data->positions[i].x;
+        outPositions[i * 3u + 1u] = data->positions[i].y;
+        outPositions[i * 3u + 2u] = data->positions[i].z;
+    }
+    return true;
+}
+
+KINE_API bool Kine_Filament_CopyMeshDataIndices(
+    const KineFilamentMeshData* meshData, uint32_t* outIndices, int indexCapacity)
+{
+    const auto* data = reinterpret_cast<const KineCpuMeshData*>(meshData);
+    const size_t required = data ? data->indices.size() : 0u;
+    if (!data || !outIndices || indexCapacity < 0 || (size_t)indexCapacity < required)
+        return false;
+    std::copy(data->indices.begin(), data->indices.end(), outIndices);
+    return true;
+}
+
+KINE_API void Kine_Filament_DestroyMeshData(KineFilamentMeshData* meshData)
+{
+    delete reinterpret_cast<KineCpuMeshData*>(meshData);
 }
 
 KINE_API KineFilamentTex* Kine_Filament_CreateTexFromPixels(

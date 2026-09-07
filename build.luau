@@ -176,7 +176,7 @@ if b_windows or (not anyPlatform and zune.platform.os == "windows") then
 end
 
 if b_macos or (not anyPlatform and zune.platform.os == "macos") then
-	buildExecutable("macos_x86-64", ".app", "dylib")
+	buildExecutable("macos_arm64", ".app", "dylib")
 end
 
 if b_debian or (not anyPlatform and zune.platform.os == "linux") then

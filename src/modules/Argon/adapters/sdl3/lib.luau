@@ -474,6 +474,32 @@ function SDLAdapter:CreateMeshFromPath(window: typedefs.Window, path: string)
 	return filament:CreateMeshFromPath(window, zembed.AssetPath(path))
 end
 
+function SDLAdapter:LoadMeshDataFromPath(path: string)
+	return filament:LoadMeshDataFromPath(zembed.AssetPath(path))
+end
+
+function SDLAdapter:GetMeshSkeleton(mesh: typedefs.Mesh)
+	return filament:GetMeshSkeleton(mesh)
+end
+
+function SDLAdapter:GetMeshAnimations(mesh: typedefs.Mesh)
+	return filament:GetMeshAnimations(mesh)
+end
+
+function SDLAdapter:SetMeshBoneTransforms(window: typedefs.Window, mesh: typedefs.Mesh, transforms)
+	return filament:SetMeshBoneTransforms(window, mesh, transforms)
+end
+
+function SDLAdapter:ApplyMeshAnimation(
+	window: typedefs.Window,
+	mesh: typedefs.Mesh,
+	animation: string | number,
+	timeSeconds: number,
+	looped: boolean?
+)
+	return filament:ApplyMeshAnimation(window, mesh, animation, timeSeconds, looped)
+end
+
 function SDLAdapter:CreateCustomMesh(window: typedefs.Window, vertexData, vertexCount, indices, indexCount)
 	return filament:CreateCustomMesh(window, vertexData, vertexCount, indices, indexCount)
 end

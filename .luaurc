@@ -96,6 +96,7 @@
         "LayoutEngine": "./src/modules/LayoutEngine",
         "Camera": "./src/environment/class/list/Camera",
         "Part": "./src/environment/class/list/Part",
+        "Attachment": "./src/environment/class/list/Attachment",
         "StudioTheme": "./src/environment/class/list/StudioTheme",
         "ParticleEmitter": "./src/environment/class/list/ParticleEmitter",
         "raycast": "./src/modules/raycast",

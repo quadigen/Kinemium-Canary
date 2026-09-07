@@ -12,11 +12,8 @@ baseplate.CFrame = CFrame.new(0, -8, 0)
 baseplate.Size = Vector3.new(1000, 16, 1000)
 baseplate.Name = "Baseplate"
 baseplate.Parent = workspace
+baseplate.Material = Enum.Material.debug
 baseplate.Anchored = true
-
-local Texture = Instance.new("Texture")
-Texture.Texture = "kineasset://images/tex.png"
-Texture.Parent = baseplate
 
 local spawnLocation = Instance.new("Part")
 spawnLocation.CFrame = CFrame.new(0, 0, 0)

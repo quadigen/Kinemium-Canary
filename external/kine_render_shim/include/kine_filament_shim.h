@@ -14,6 +14,7 @@ extern "C" {
 
 typedef struct KineFilamentContext KineFilamentContext;
 typedef struct KineFilamentMesh    KineFilamentMesh;
+typedef struct KineFilamentMeshData KineFilamentMeshData;
 typedef struct KineFilamentTex     KineFilamentTex;
 typedef struct KineFilamentInstanceBatch KineFilamentInstanceBatch;
 typedef struct KineFilamentShader KineFilamentShader;
@@ -278,6 +279,35 @@ KINE_API void Kine_Filament_SetCameraDirection(KineFilamentContext* ctx, float d
 KINE_API KineFilamentMesh* Kine_Filament_CreateMesh(KineFilamentContext* ctx, int shape);
 KINE_API KineFilamentMesh* Kine_Filament_CreateMeshFromPath(KineFilamentContext* ctx, const char* path);
 KINE_API void Kine_Filament_DestroyMesh(KineFilamentContext* ctx, KineFilamentMesh* mesh);
+/* Imported skeletal data. Bind transforms and caller-provided bone transforms
+   are row-major affine float[16] matrices in mesh-local space. Bone transforms
+   are converted to final skin matrices with the imported inverse bind pose. */
+KINE_API int Kine_Filament_GetMeshBoneCount(const KineFilamentMesh* mesh);
+KINE_API const char* Kine_Filament_GetMeshBoneName(const KineFilamentMesh* mesh, int boneIndex);
+KINE_API int Kine_Filament_GetMeshBoneParent(const KineFilamentMesh* mesh, int boneIndex);
+KINE_API bool Kine_Filament_CopyMeshBoneBindTransform(
+    const KineFilamentMesh* mesh, int boneIndex, float* outTransform16);
+KINE_API bool Kine_Filament_SetMeshBoneTransforms(
+    KineFilamentContext* ctx, KineFilamentMesh* mesh,
+    const float* boneTransforms16, int boneCount);
+KINE_API int Kine_Filament_GetMeshAnimationCount(const KineFilamentMesh* mesh);
+KINE_API const char* Kine_Filament_GetMeshAnimationName(
+    const KineFilamentMesh* mesh, int animationIndex);
+KINE_API float Kine_Filament_GetMeshAnimationDuration(
+    const KineFilamentMesh* mesh, int animationIndex);
+KINE_API bool Kine_Filament_ApplyMeshAnimation(
+    KineFilamentContext* ctx, KineFilamentMesh* mesh,
+    int animationIndex, float timeSeconds, bool loop);
+/* CPU-only import used by headless/server collision generation. Positions are
+   returned as tightly packed xyz floats and indices are zero-based uint32s. */
+KINE_API KineFilamentMeshData* Kine_Filament_LoadMeshDataFromPath(const char* path);
+KINE_API int Kine_Filament_GetMeshDataVertexCount(const KineFilamentMeshData* meshData);
+KINE_API int Kine_Filament_GetMeshDataIndexCount(const KineFilamentMeshData* meshData);
+KINE_API bool Kine_Filament_CopyMeshDataPositions(
+    const KineFilamentMeshData* meshData, float* outPositions, int positionFloatCapacity);
+KINE_API bool Kine_Filament_CopyMeshDataIndices(
+    const KineFilamentMeshData* meshData, uint32_t* outIndices, int indexCapacity);
+KINE_API void Kine_Filament_DestroyMeshData(KineFilamentMeshData* meshData);
 KINE_API void Kine_Filament_DebugPrintPixel(KineFilamentContext* ctx);
 KINE_API KineFilamentGizmo* Kine_Filament_CreateGizmo(KineFilamentContext* ctx, int gizmoType);
 KINE_API void Kine_Filament_DestroyGizmo(KineFilamentContext* ctx, KineFilamentGizmo* gizmo);

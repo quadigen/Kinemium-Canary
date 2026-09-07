@@ -15,7 +15,7 @@ jobs:
             folder: windows_x86-64
           - os: macos-latest
             flag: macos
-            folder: macos_x86-64
+            folder: macos_arm64
           - os: ubuntu-latest
             flag: debian
             folder: debian_x86-64

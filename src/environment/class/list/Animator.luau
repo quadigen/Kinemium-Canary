@@ -49,11 +49,40 @@ local propTable = {
 
 return {
 	class = "Animator",
-	callback = function(instance)
+	callback = function(instance, renderer, datamodel)
 		instance:SetProperties(propTable)
 		instance.AnimationPlayed = signal.new()
 		instance.PoseLayers = {}
 		instance.State = {}
+		instance._animationTracks = {}
+
+		-- description: "Loads an Animation and returns a controllable AnimationTrack."
+		-- args: "animation: Animation"
+		function instance:LoadAnimation(animation)
+			if not animation or type(animation.AnimationId) ~= "string" then
+				error("Animator:LoadAnimation expects an Animation instance", 2)
+			end
+			local Registry = require("@InstanceRegistry")
+			local track = Registry.new("AnimationTrack", renderer, datamodel)
+			track.Name = animation.Name ~= "" and animation.Name or "AnimationTrack"
+			track.Animation = animation
+			track.AnimationId = animation.AnimationId
+			track._animator = instance
+			track.Parent = instance
+			table.insert(instance._animationTracks, track)
+			instance.AnimationPlayed:Fire(track)
+			return track
+		end
+
+		function instance:GetPlayingAnimationTracks()
+			local playing = {}
+			for _, track in ipairs(instance._animationTracks) do
+				if track and track.IsPlaying then
+					table.insert(playing, track)
+				end
+			end
+			return playing
+		end
 
 		-- description: "Sets the Pose Provider."
 		-- args: "provider: number"

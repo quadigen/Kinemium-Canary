@@ -1,4 +1,5 @@
 -- Filament adapter
+local ffi = zune.ffi
 local filament = require("./filament")
 local filamentAdapter = {}
 local typedefs = require("../../typedefs")
@@ -27,6 +28,7 @@ end
 local drawListBuffers: { [any]: any } = setmetatable({}, { __mode = "k" })
 local indexBuffers: { [any]: any } = setmetatable({}, { __mode = "k" })
 local transformBuffers: { [any]: any } = setmetatable({}, { __mode = "k" })
+local skinBuffers: { [any]: any } = setmetatable({}, { __mode = "k" })
 local drawListVersions: { [any]: { [number]: number } } = setmetatable({}, { __mode = "k" })
 
 assert(DRAW_ITEM_SIZE == 128, "KineFilamentDrawItem ABI mismatch")
@@ -727,6 +729,169 @@ function filamentAdapter:CreateMeshFromPath(window: typedefs.Window, path: strin
 		return nil
 	end
 	return { _handle = mesh }
+end
+
+function filamentAdapter:LoadMeshDataFromPath(path: string): any?
+	local nativeData = filament.lib.Kine_Filament_LoadMeshDataFromPath(path)
+	if not nativeData or nativeData == zune.ffi.null then
+		return nil
+	end
+
+	local vertexCount = filament.lib.Kine_Filament_GetMeshDataVertexCount(nativeData)
+	local indexCount = filament.lib.Kine_Filament_GetMeshDataIndexCount(nativeData)
+	if vertexCount < 3 or indexCount < 3 then
+		filament.lib.Kine_Filament_DestroyMeshData(nativeData)
+		return nil
+	end
+
+	local positions = ffi.create(ffi.types.float:array(vertexCount * 3))
+	local indices = ffi.create(ffi.types.u32:array(indexCount))
+	local positionsOk = filament.lib.Kine_Filament_CopyMeshDataPositions(nativeData, positions, vertexCount * 3) ~= 0
+	local indicesOk = filament.lib.Kine_Filament_CopyMeshDataIndices(nativeData, indices, indexCount) ~= 0
+	filament.lib.Kine_Filament_DestroyMeshData(nativeData)
+	if not positionsOk or not indicesOk then
+		return nil
+	end
+
+	local vertices = table.create(vertexCount)
+	for index = 0, vertexCount - 1 do
+		vertices[index + 1] = {
+			position = {
+				positions:readf32(index * 12),
+				positions:readf32(index * 12 + 4),
+				positions:readf32(index * 12 + 8),
+			},
+		}
+	end
+	local resultIndices = table.create(indexCount)
+	for index = 0, indexCount - 1 do
+		resultIndices[index + 1] = indices:readu32(index * 4)
+	end
+	return { vertices = vertices, indices = resultIndices }
+end
+
+function filamentAdapter:GetMeshSkeleton(mesh: typedefs.Mesh): { any }
+	if not mesh or not mesh._handle then
+		return {}
+	end
+	local boneCount = filament.lib.Kine_Filament_GetMeshBoneCount(mesh._handle)
+	if boneCount <= 0 then
+		return {}
+	end
+	local matrix = ffi.alloc(16 * 4)
+	local bones = table.create(boneCount)
+	for boneIndex = 0, boneCount - 1 do
+		local copied = filament.lib.Kine_Filament_CopyMeshBoneBindTransform(mesh._handle, boneIndex, matrix) ~= 0
+		local values = table.create(16)
+		if copied then
+			for component = 0, 15 do
+				values[component + 1] = matrix:readf32(component * 4)
+			end
+		end
+		local parent = filament.lib.Kine_Filament_GetMeshBoneParent(mesh._handle, boneIndex)
+		bones[boneIndex + 1] = {
+			index = boneIndex,
+			name = readCString(filament.lib.Kine_Filament_GetMeshBoneName(mesh._handle, boneIndex), 1024),
+			parentIndex = if parent >= 0 then parent + 1 else 0,
+			bindTransform = values,
+		}
+	end
+	ffi.free(matrix)
+	return bones
+end
+
+function filamentAdapter:GetMeshAnimations(mesh: typedefs.Mesh): { any }
+	if not mesh or not mesh._handle then
+		return {}
+	end
+	local animationCount = filament.lib.Kine_Filament_GetMeshAnimationCount(mesh._handle)
+	local animations = table.create(math.max(animationCount, 0))
+	for animationIndex = 0, animationCount - 1 do
+		animations[animationIndex + 1] = {
+			index = animationIndex,
+			name = readCString(filament.lib.Kine_Filament_GetMeshAnimationName(mesh._handle, animationIndex), 1024),
+			duration = filament.lib.Kine_Filament_GetMeshAnimationDuration(mesh._handle, animationIndex),
+		}
+	end
+	return animations
+end
+
+local function writeCFrameMatrix(target, offset: number, cframe)
+	local position = cframe.Position
+	local rotation = cframe.Rotation
+	target:writef32(offset, rotation[1][1])
+	target:writef32(offset + 4, rotation[1][2])
+	target:writef32(offset + 8, rotation[1][3])
+	target:writef32(offset + 12, position.X)
+	target:writef32(offset + 16, rotation[2][1])
+	target:writef32(offset + 20, rotation[2][2])
+	target:writef32(offset + 24, rotation[2][3])
+	target:writef32(offset + 28, position.Y)
+	target:writef32(offset + 32, rotation[3][1])
+	target:writef32(offset + 36, rotation[3][2])
+	target:writef32(offset + 40, rotation[3][3])
+	target:writef32(offset + 44, position.Z)
+	target:writef32(offset + 48, 0)
+	target:writef32(offset + 52, 0)
+	target:writef32(offset + 56, 0)
+	target:writef32(offset + 60, 1)
+end
+
+function filamentAdapter:SetMeshBoneTransforms(window: typedefs.Window, mesh: typedefs.Mesh, transforms: { any }): boolean
+	if not window._3dhandle or window._3dhandle == zune.ffi.null or not mesh or not mesh._handle then
+		return false
+	end
+	local boneCount = #transforms
+	if boneCount <= 0 then
+		return false
+	end
+	local matrices = getRawBuffer(skinBuffers, mesh, boneCount * 16 * 4)
+	for index = 1, boneCount do
+		local transform = transforms[index]
+		if not transform or not transform.Position or not transform.Rotation then
+			return false
+		end
+		writeCFrameMatrix(matrices, (index - 1) * 16 * 4, transform)
+	end
+	return filament.lib.Kine_Filament_SetMeshBoneTransforms(
+		window._3dhandle,
+		mesh._handle,
+		matrices,
+		boneCount
+	) ~= 0
+end
+
+function filamentAdapter:ApplyMeshAnimation(
+	window: typedefs.Window,
+	mesh: typedefs.Mesh,
+	animation: string | number,
+	timeSeconds: number,
+	looped: boolean?
+): boolean
+	if not window._3dhandle or window._3dhandle == zune.ffi.null or not mesh or not mesh._handle then
+		return false
+	end
+	local animationIndex = if type(animation) == "number" then math.floor(animation) - 1 else -1
+	if type(animation) == "string" then
+		local wanted = string.lower(animation:gsub("\\", "/"):match("([^/]+)$") or animation):gsub("%.[^%.]+$", "")
+		for _, clip in ipairs(self:GetMeshAnimations(mesh)) do
+			local candidate = string.lower(clip.name)
+			if candidate == string.lower(animation) or candidate == wanted or candidate:gsub("%.[^%.]+$", "") == wanted then
+				animationIndex = clip.index
+				break
+			end
+		end
+	end
+	if animationIndex < 0 then
+		return false
+	end
+	return filament.lib.Kine_Filament_ApplyMeshAnimation(
+		window._3dhandle,
+		mesh._handle,
+		animationIndex,
+		timeSeconds or 0,
+		looped ~= false and 1 or 0
+	) ~= 0
 end
 
 function filamentAdapter:CreateCustomMesh(

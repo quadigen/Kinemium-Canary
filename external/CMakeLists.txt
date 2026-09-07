@@ -248,7 +248,10 @@ else()
     find_library(KINE_LIBCXX NAMES c++ libc++.so.1)
     find_library(KINE_LIBCXXABI NAMES c++abi libc++abi.so.1)
 
-    target_link_options(KinemiumLibs PRIVATE -Wl,-z,noexecstack)
+    target_link_options(KinemiumLibs PRIVATE
+        "LINKER:-z,defs"
+        "LINKER:-z,noexecstack"
+    )
     target_link_libraries(KinemiumLibs PRIVATE GL X11 dl pthread m)
 
     if(KINE_LIBCXX)

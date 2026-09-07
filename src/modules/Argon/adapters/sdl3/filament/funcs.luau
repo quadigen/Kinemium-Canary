@@ -219,10 +219,37 @@ export type Fns = {
 	) -> (),
 
 	-- Mesh system
-	-- shape: 1 = cube, 2 = sphere, 3 = pyramid, 10 = move gizmo, 11 = rotate gizmo, 12 = scale gizmo
+	-- shape: 1 = cube, 2 = sphere, 3 = pyramid, 4 = quad, 6 = cylinder,
+	-- 10 = move gizmo, 11 = rotate gizmo, 12 = scale gizmo
 	Kine_Filament_CreateMesh: (ctx: FFIPointer, shape: int) -> FFIPointer,
 	Kine_Filament_CreateMeshFromPath: (ctx: FFIPointer, path: cstring) -> FFIPointer,
 	Kine_Filament_DestroyMesh: (ctx: FFIPointer, mesh: FFIPointer) -> (),
+	Kine_Filament_GetMeshBoneCount: (mesh: FFIPointer) -> int,
+	Kine_Filament_GetMeshBoneName: (mesh: FFIPointer, boneIndex: int) -> FFIPointer,
+	Kine_Filament_GetMeshBoneParent: (mesh: FFIPointer, boneIndex: int) -> int,
+	Kine_Filament_CopyMeshBoneBindTransform: (mesh: FFIPointer, boneIndex: int, transform: FFIPointer) -> bool,
+	Kine_Filament_SetMeshBoneTransforms: (
+		ctx: FFIPointer,
+		mesh: FFIPointer,
+		transforms: FFIPointer,
+		boneCount: int
+	) -> bool,
+	Kine_Filament_GetMeshAnimationCount: (mesh: FFIPointer) -> int,
+	Kine_Filament_GetMeshAnimationName: (mesh: FFIPointer, animationIndex: int) -> FFIPointer,
+	Kine_Filament_GetMeshAnimationDuration: (mesh: FFIPointer, animationIndex: int) -> float,
+	Kine_Filament_ApplyMeshAnimation: (
+		ctx: FFIPointer,
+		mesh: FFIPointer,
+		animationIndex: int,
+		timeSeconds: float,
+		loop: bool
+	) -> bool,
+	Kine_Filament_LoadMeshDataFromPath: (path: cstring) -> FFIPointer,
+	Kine_Filament_GetMeshDataVertexCount: (meshData: FFIPointer) -> int,
+	Kine_Filament_GetMeshDataIndexCount: (meshData: FFIPointer) -> int,
+	Kine_Filament_CopyMeshDataPositions: (meshData: FFIPointer, positions: FFIPointer, capacity: int) -> bool,
+	Kine_Filament_CopyMeshDataIndices: (meshData: FFIPointer, indices: FFIPointer, capacity: int) -> bool,
+	Kine_Filament_DestroyMeshData: (meshData: FFIPointer) -> (),
 	Kine_Filament_CreateGizmo: (ctx: FFIPointer, gizmoType: int) -> FFIPointer,
 	Kine_Filament_DestroyGizmo: (ctx: FFIPointer, gizmo: FFIPointer) -> (),
 
@@ -780,6 +807,66 @@ local funcs = {
 	Kine_Filament_DestroyMesh = {
 		returns = ffi.types.void,
 		args = { ffi.types.pointer, ffi.types.pointer },
+	},
+	Kine_Filament_GetMeshBoneCount = {
+		returns = ffi.types.i32,
+		args = { ffi.types.pointer },
+	},
+	Kine_Filament_GetMeshBoneName = {
+		returns = ffi.types.pointer,
+		args = { ffi.types.pointer, ffi.types.i32 },
+	},
+	Kine_Filament_GetMeshBoneParent = {
+		returns = ffi.types.i32,
+		args = { ffi.types.pointer, ffi.types.i32 },
+	},
+	Kine_Filament_CopyMeshBoneBindTransform = {
+		returns = ffi.types.u8,
+		args = { ffi.types.pointer, ffi.types.i32, ffi.types.pointer },
+	},
+	Kine_Filament_SetMeshBoneTransforms = {
+		returns = ffi.types.u8,
+		args = { ffi.types.pointer, ffi.types.pointer, ffi.types.pointer, ffi.types.i32 },
+	},
+	Kine_Filament_GetMeshAnimationCount = {
+		returns = ffi.types.i32,
+		args = { ffi.types.pointer },
+	},
+	Kine_Filament_GetMeshAnimationName = {
+		returns = ffi.types.pointer,
+		args = { ffi.types.pointer, ffi.types.i32 },
+	},
+	Kine_Filament_GetMeshAnimationDuration = {
+		returns = ffi.types.float,
+		args = { ffi.types.pointer, ffi.types.i32 },
+	},
+	Kine_Filament_ApplyMeshAnimation = {
+		returns = ffi.types.u8,
+		args = { ffi.types.pointer, ffi.types.pointer, ffi.types.i32, ffi.types.float, ffi.types.u8 },
+	},
+	Kine_Filament_LoadMeshDataFromPath = {
+		returns = ffi.types.pointer,
+		args = { ffi.types.pointer },
+	},
+	Kine_Filament_GetMeshDataVertexCount = {
+		returns = ffi.types.i32,
+		args = { ffi.types.pointer },
+	},
+	Kine_Filament_GetMeshDataIndexCount = {
+		returns = ffi.types.i32,
+		args = { ffi.types.pointer },
+	},
+	Kine_Filament_CopyMeshDataPositions = {
+		returns = ffi.types.u8,
+		args = { ffi.types.pointer, ffi.types.pointer, ffi.types.i32 },
+	},
+	Kine_Filament_CopyMeshDataIndices = {
+		returns = ffi.types.u8,
+		args = { ffi.types.pointer, ffi.types.pointer, ffi.types.i32 },
+	},
+	Kine_Filament_DestroyMeshData = {
+		returns = ffi.types.void,
+		args = { ffi.types.pointer },
 	},
 	Kine_Filament_CreateGizmo = {
 		returns = ffi.types.pointer,

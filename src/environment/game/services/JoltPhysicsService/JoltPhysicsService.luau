@@ -876,6 +876,7 @@ KinemiumPhysicsService.InitRenderer = function(renderer, renderer_signal, game)
 					if
 						property == "Size"
 						or property == "Shape"
+						or property == "MeshId"
 						or property == "MeshObject"
 						or property == "CollisionFidelity"
 						or property == "CollisionScale"

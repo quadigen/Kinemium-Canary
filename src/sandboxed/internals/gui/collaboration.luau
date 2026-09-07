@@ -118,10 +118,8 @@ renderer.Pool.new("2da", function(lib)
 	end, dt)
 
 	button({ x = x + 177, y = y + 136, width = 150, height = 38 }, "Join Clipboard", function()
-		local joined, reason = NetworkService:JoinCollaboration(
-			Argon:GetClipboard(),
-			GetFlagValue("username") or "Collaborator"
-		)
+		local joined, reason =
+			NetworkService:JoinCollaboration(Argon:GetClipboard(), GetFlagValue("username") or "Collaborator")
 		status = joined and "Connected" or ("Join failed: " .. tostring(reason))
 	end, dt)
 

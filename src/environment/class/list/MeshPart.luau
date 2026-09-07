@@ -3,6 +3,7 @@ local Vector3 = require("@Vector3")
 local Part = require("@Part")
 local Enum = require("@EnumMap")
 local argon = require("@Argon")
+local CFrame = require("@CFrame")
 
 local propTable = {
 	MeshObject = nil,
@@ -18,6 +19,11 @@ local propTable = {
 	Name = "MeshPart",
 	BaseClass = "BasePart",
 	MeshScale = 1,
+	SkinningEnabled = true,
+	CurrentAnimation = "",
+	AnimationTime = 0,
+	AnimationSpeed = 1,
+	LoopAnimation = true,
 	Transparency = 0,
 	Size = Vector3.new(1, 1, 1),
 }
@@ -46,6 +52,9 @@ return {
 		local syncingTransform = false
 
 		local ownedMeshObject = nil
+		local ownedBones = {}
+		local importedBones = {}
+		local importedAnimations = {}
 		local loadingMeshId = false
 		local ownedTexture = nil
 		local loadingTexture = false
@@ -66,6 +75,69 @@ return {
 				rawget(instance, "_props").MeshObject = nil
 			end
 			previous:Destroy()
+		end
+
+		local function releaseOwnedBones()
+			for _, bone in ipairs(ownedBones) do
+				if bone and bone.Parent ~= nil then
+					bone:Destroy()
+				end
+			end
+			table.clear(ownedBones)
+			table.clear(importedBones)
+			table.clear(importedAnimations)
+		end
+
+		local function matrixToCFrame(matrix)
+			if type(matrix) ~= "table" or #matrix < 16 then
+				return CFrame.new()
+			end
+			return CFrame.new(
+				matrix[4],
+				matrix[8],
+				matrix[12],
+				matrix[1],
+				matrix[2],
+				matrix[3],
+				matrix[5],
+				matrix[6],
+				matrix[7],
+				matrix[9],
+				matrix[10],
+				matrix[11]
+			)
+		end
+
+		local function rebuildImportedBones(mesh)
+			releaseOwnedBones()
+			if not mesh or not argon.GetMeshSkeleton then
+				return
+			end
+			local skeleton = argon:GetMeshSkeleton(mesh)
+			if type(skeleton) ~= "table" or #skeleton == 0 then
+				return
+			end
+			local Registry = require("@InstanceRegistry")
+			for index, definition in ipairs(skeleton) do
+				local bone = Registry.new("Bone", renderer, game)
+				bone.Name = definition.name ~= "" and definition.name or ("Bone" .. tostring(index))
+				bone.BoneId = definition.index
+				bone.CFrame = matrixToCFrame(definition.bindTransform)
+				bone.Transform = CFrame.new()
+				bone._meshPartBone = true
+				ownedBones[index] = bone
+				importedBones[index] = {
+					bone = bone,
+					parentIndex = definition.parentIndex,
+				}
+			end
+			for index, definition in ipairs(importedBones) do
+				local parent = definition.parentIndex > 0 and ownedBones[definition.parentIndex] or instance
+				ownedBones[index].Parent = parent or instance
+			end
+			if argon.GetMeshAnimations then
+				importedAnimations = argon:GetMeshAnimations(mesh)
+			end
 		end
 
 		local function releaseOwnedTexture()
@@ -103,9 +175,18 @@ return {
 				return
 			end
 			loadingMeshId = true
+			releaseOwnedBones()
 			releaseOwnedMeshObject()
 
 			local path = type(meshId) == "string" and meshId or ""
+			local cpuMeshData = nil
+			if path ~= "" and argon.LoadMeshDataFromPath then
+				local ok, result = pcall(argon.LoadMeshDataFromPath, argon, path)
+				if ok then
+					cpuMeshData = result
+				end
+			end
+			rawget(instance, "_props")._cpuMeshData = cpuMeshData
 			if path ~= "" and not _G.IsHeadless and renderer and renderer.Window then
 				local ok, mesh = pcall(argon.CreateMeshFromPath, argon, renderer.Window, path)
 				if ok and mesh and mesh._handle then
@@ -116,10 +197,12 @@ return {
 					meshObject._mesh = mesh
 					meshObject._meshgenHandle = mesh
 					meshObject._sourcePath = path
+					meshObject._cpuMeshData = cpuMeshData
 					meshObject._geometryDirty = false
 					ownedMeshObject = meshObject
 					rawget(instance, "_props").MeshObject = meshObject
 					syncMeshObject(meshObject)
+					rebuildImportedBones(mesh)
 				else
 					warn(`MeshPart could not load mesh "{path}"`)
 					syncMeshObject(nil)
@@ -130,6 +213,140 @@ return {
 
 			loadingMeshId = false
 			renderer.EventBus:Fire("UpdatePart", instance)
+		end
+
+		local function findAnimation(animation)
+			if type(animation) == "number" then
+				return importedAnimations[math.floor(animation)]
+			end
+			if type(animation) ~= "string" then
+				return nil
+			end
+			local wanted = string.lower(animation:gsub("\\", "/"):match("([^/]+)$") or animation):gsub("%.[^%.]+$", "")
+			for _, clip in ipairs(importedAnimations) do
+				local name = string.lower(clip.name or "")
+				if name == string.lower(animation) or name == wanted or name:gsub("%.[^%.]+$", "") == wanted then
+					return clip
+				end
+			end
+			return nil
+		end
+
+		function instance:GetBones()
+			local result = table.create(#ownedBones)
+			for index, bone in ipairs(ownedBones) do
+				result[index] = bone
+			end
+			return result
+		end
+
+		function instance:GetBoneByName(name: string)
+			for _, bone in ipairs(ownedBones) do
+				if bone.Name == name then
+					return bone
+				end
+			end
+			return nil
+		end
+
+		function instance:GetAnimationClips()
+			local result = table.create(#importedAnimations)
+			for index, clip in ipairs(importedAnimations) do
+				result[index] = {
+					Name = clip.name,
+					Length = clip.duration,
+					Index = index,
+				}
+			end
+			return result
+		end
+
+		function instance:PlayAnimation(animation, looped: boolean?, speed: number?)
+			local clip = findAnimation(animation)
+			if not clip then
+				return false
+			end
+			instance.CurrentAnimation = clip.name
+			instance.AnimationTime = 0
+			instance.LoopAnimation = looped ~= false
+			instance.AnimationSpeed = type(speed) == "number" and speed or 1
+			return true
+		end
+
+		function instance:StopAnimation()
+			instance.CurrentAnimation = ""
+			instance.AnimationTime = 0
+		end
+
+		function instance:ResetBoneTransforms()
+			for _, bone in ipairs(ownedBones) do
+				bone.Transform = CFrame.new()
+			end
+			instance:StopAnimation()
+		end
+
+		local function updateManualBonePose(mesh)
+			if #importedBones == 0 or not argon.SetMeshBoneTransforms then
+				return
+			end
+			local transforms = table.create(#importedBones)
+			local states = table.create(#importedBones, 0)
+			local function evaluate(index)
+				if states[index] == 2 then
+					return transforms[index]
+				end
+				if states[index] == 1 then
+					return CFrame.new()
+				end
+				states[index] = 1
+				local definition = importedBones[index]
+				local bone = definition.bone
+				local transformed = bone.CFrame * bone.Transform
+				bone.TransformedCFrame = transformed
+				local parentTransform = if definition.parentIndex > 0
+					then evaluate(definition.parentIndex)
+					else CFrame.new()
+				local world = parentTransform * transformed
+				transforms[index] = world
+				bone.TransformedWorldCFrame = instance.CFrame * world
+				states[index] = 2
+				return world
+			end
+			for index = 1, #importedBones do
+				evaluate(index)
+			end
+			argon:SetMeshBoneTransforms(renderer.Window, mesh, transforms)
+		end
+
+		local destroyed = false
+		if renderer and renderer.Hook and renderer.Hook.new then
+			renderer.Hook.new("Renderstep", function(dt)
+				if destroyed or instance.SkinningEnabled == false then
+					return
+				end
+				local mesh = instance._mesh
+				if not mesh or not mesh._handle or #importedBones == 0 then
+					return
+				end
+				local currentAnimation = instance.CurrentAnimation
+				if currentAnimation ~= "" and argon.ApplyMeshAnimation then
+					local newTime = (instance.AnimationTime or 0) + (dt or 0) * (instance.AnimationSpeed or 1)
+					instance.AnimationTime = newTime
+					if
+						not argon:ApplyMeshAnimation(
+							renderer.Window,
+							mesh,
+							currentAnimation,
+							newTime,
+							instance.LoopAnimation
+						)
+					then
+						instance.CurrentAnimation = ""
+					end
+				else
+					updateManualBonePose(mesh)
+				end
+			end)
 		end
 
 		local function syncFromCFrame(cf)
@@ -209,7 +426,9 @@ return {
 		end)
 
 		instance.Destroying:Connect(function()
+			destroyed = true
 			releaseOwnedTexture()
+			releaseOwnedBones()
 			releaseOwnedMeshObject()
 		end)
 
