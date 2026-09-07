@@ -1,5 +1,5 @@
 -- description: "Adds configurable room reverberation to a Sound."
-local AudioEffectBridge = require("../AudioEffectBridge")
+local AudioEffectBridge = require("@AudioEffectBridge")
 
 return AudioEffectBridge.Define("ReverbSoundEffect", {
 	Enabled = true,

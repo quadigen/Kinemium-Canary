@@ -65,6 +65,8 @@ local function buildLines(window, font, textSize, rawText: string, maxWidth: num
 	return wrapped
 end
 
+local Overlay = require("./Overlay")
+
 return function(params: typedefs.TooltipParams, dt: number): (boolean, number)
 	local storage = params.RetainedStorage
 	local id = params.id

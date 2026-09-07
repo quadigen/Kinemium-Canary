@@ -428,6 +428,7 @@ renderer.Pool.new("2da", function(lib)
 				theme = theme,
 				engine_window = renderer.Window,
 			}, dt)
+			Argon:Restore(renderer.Window)
 
 			if category_button.tooltip then
 				Immco.Tooltip({
@@ -457,8 +458,6 @@ renderer.Pool.new("2da", function(lib)
 			end
 		end
 	end
-
-	Argon:Restore(renderer.Window)
 
 	local engineCategory = ishared.buttonCategories[1]
 	local toolbarCategory = ishared.buttonCategories[2]

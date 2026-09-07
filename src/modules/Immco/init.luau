@@ -22,5 +22,6 @@ lib.Tabs = require("./Immco/components/Tabs")
 lib.Kbd = require("./Immco/components/Kbd")
 lib.PanZoomCanvas = require("./Immco/components/PanZoomCanvas")
 lib.Scene2DEditor = require("./Immco/components/Scene2DEditor")
+lib.Overlay = require("./Immco/components/Overlay")
 
 return lib

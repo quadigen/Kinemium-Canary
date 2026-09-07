@@ -271,5 +271,12 @@ else()
         "LINKER:-z,defs"
         "LINKER:-z,noexecstack"
     )
-    target_link_libraries(KinemiumLibs PRIVATE GL X11 dl pthread m)
+
+    target_link_libraries(KinemiumLibs PRIVATE
+        GL
+        X11
+        dl
+        pthread
+        m
+    )
 endif()

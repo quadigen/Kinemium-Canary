@@ -84,7 +84,6 @@ function instance_mt.__newindex(self, key, value)
 		return
 	end
 
-	-- Barrier check: allows validating/transforming/blocking a property write
 	local barriers = rawget(self, "_barriers")
 	if barriers and barriers[key] then
 		local result = barriers[key](value)

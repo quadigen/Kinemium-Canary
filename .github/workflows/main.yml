@@ -50,7 +50,7 @@ jobs:
         run: |
           if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
             sudo apt-get update
-            sudo apt-get install -y cmake ninja-build build-essential libc++1 libc++abi1 libc++-dev libc++abi-dev
+            sudo apt-get install -y cmake ninja-build build-essential clang libc++1 libc++abi1 libc++-dev libc++abi-dev
           elif [[ "${{ matrix.os }}" == "macos-latest" ]]; then
             brew install cmake ninja
           elif [[ "${{ matrix.os }}" == "windows-latest" ]]; then
@@ -85,9 +85,16 @@ jobs:
       - name: Configure CMake
         shell: bash
         run: |
-          cmake -S external -B external/build \
-            -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release
+          if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
+            CC=clang CXX=clang++ cmake -S external -B external/build \
+              -G Ninja \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_CXX_FLAGS="-stdlib=libc++"
+          else
+            cmake -S external -B external/build \
+              -G Ninja \
+              -DCMAKE_BUILD_TYPE=Release
+          fi
 
       - name: Build native dependencies
         shell: bash

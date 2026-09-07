@@ -1,5 +1,5 @@
 -- description: "Adds a delayed echo to a Sound."
-local AudioEffectBridge = require("../AudioEffectBridge")
+local AudioEffectBridge = require("@AudioEffectBridge")
 
 return AudioEffectBridge.Define("EchoSoundEffect", {
 	Enabled = true,

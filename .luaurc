@@ -162,6 +162,7 @@
 		"ReplicationNetworkEmulator": "./src/environment/game/services/ReplicatorService/NetworkEmulator",
 		"ReplicationSchema": "./src/environment/game/services/ReplicatorService/ReplicationSchema",
 		"RemoteBridge": "./src/environment/class/RemoteBridge",
+        "AudioEffectBridge": "./src/environment/class/AudioEffectBridge",
         "LightBridge": "./src/environment/class/LightBridge",
 		"ServerReplicator": "./src/environment/game/services/ReplicatorService/ServerReplicator",
 		"ClientReplicator": "./src/environment/game/services/ReplicatorService/ClientReplicator",

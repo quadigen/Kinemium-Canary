@@ -1,5 +1,5 @@
 -- description: "Applies low, mid, and high frequency gain to a Sound."
-local AudioEffectBridge = require("../AudioEffectBridge")
+local AudioEffectBridge = require("@AudioEffectBridge")
 
 return AudioEffectBridge.Define("EqualizerSoundEffect", {
 	Enabled = true,
