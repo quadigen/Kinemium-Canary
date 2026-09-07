@@ -330,6 +330,12 @@ if(KINE_WITH_FILAMENT)
 
     target_compile_features(kine_filament_shim PRIVATE cxx_std_20)
 
+    if(MSVC)
+        target_compile_options(kine_filament_shim PRIVATE /GR-)
+    else()
+        target_compile_options(kine_filament_shim PRIVATE -fno-rtti)
+    endif()
+
     target_compile_definitions(kine_filament_shim
         PRIVATE
             KINE_BUILD_EXPORTS

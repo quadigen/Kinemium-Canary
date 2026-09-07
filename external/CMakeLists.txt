@@ -205,6 +205,28 @@ endfunction()
 
 kine_link_whole_archive(KinemiumLibs kine_render_shim)
 kine_link_whole_archive(KinemiumLibs kine_filament_shim)
+if(UNIX AND NOT APPLE)
+    target_link_libraries(KinemiumLibs PRIVATE
+        "$<LINK_GROUP:RESCAN,matp,filamat,filament,backend,bluegl,bluevk,filabridge,filaflat,utils,geometry,smol-v,zstd,uberarchive,shaders>"
+    )
+else()
+    target_link_libraries(KinemiumLibs PRIVATE
+        matp
+        filamat
+        filament
+        backend
+        bluegl
+        bluevk
+        filabridge
+        filaflat
+        utils
+        geometry
+        smol-v
+        zstd
+        uberarchive
+        shaders
+    )
+endif()
 kine_link_whole_archive(KinemiumLibs kine_skia)
 kine_link_whole_archive(KinemiumLibs kine_vulkan_compositor)
 kine_link_whole_archive(KinemiumLibs kine_enet)
@@ -245,20 +267,9 @@ elseif(APPLE)
         "-framework UniformTypeIdentifiers"
     )
 else()
-    find_library(KINE_LIBCXX NAMES c++ libc++.so.1)
-    find_library(KINE_LIBCXXABI NAMES c++abi libc++abi.so.1)
-
     target_link_options(KinemiumLibs PRIVATE
         "LINKER:-z,defs"
         "LINKER:-z,noexecstack"
     )
     target_link_libraries(KinemiumLibs PRIVATE GL X11 dl pthread m)
-
-    if(KINE_LIBCXX)
-        target_link_libraries(KinemiumLibs PRIVATE "${KINE_LIBCXX}")
-    endif()
-
-    if(KINE_LIBCXXABI)
-        target_link_libraries(KinemiumLibs PRIVATE "${KINE_LIBCXXABI}")
-    endif()
 endif()
